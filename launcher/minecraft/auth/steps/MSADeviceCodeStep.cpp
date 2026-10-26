@@ -66,15 +66,16 @@ void MSADeviceCodeStep::perform()
         { "Content-Type", "application/x-www-form-urlencoded" },
         { "Accept", "application/json" },
     };
-    m_response.reset(new QByteArray());
-    m_request = Net::Upload::makeByteArray(url, m_response, payload);
-    m_request->addHeaderProxy(new Net::RawHeaderProxy(headers));
+    auto [request, response] = Net::Request::makeByteArray(url, payload);
+    m_request = request;
+    m_request->addHeaderProxy(std::make_unique<Net::RawHeaderProxy>(headers));
+    m_request->enableAutoRetry(true);
 
     m_task.reset(new NetJob("MSADeviceCodeStep", APPLICATION->network()));
     m_task->setAskRetry(false);
     m_task->addNetAction(m_request);
 
-    connect(m_task.get(), &Task::finished, this, &MSADeviceCodeStep::deviceAuthorizationFinished);
+    connect(m_task.get(), &Task::finished, this, [this, response] { deviceAuthorizationFinished(response); });
 
     m_task->start();
 }
@@ -92,41 +93,41 @@ struct DeviceAuthorizationResponse {
 
 DeviceAuthorizationResponse parseDeviceAuthorizationResponse(const QByteArray& data)
 {
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(data, &err);
-    if (err.error != QJsonParseError::NoError) {
-        qWarning() << "Failed to parse device authorization response due to err:" << err.errorString();
+    auto doc = Json::requireObject(data, "device authorization response");
+    if (!doc) {
+        qWarning() << "Failed to parse device authorization response due to err:" << doc.error();
         return {};
     }
 
-    if (!doc.isObject()) {
-        qWarning() << "Device authorization response is not an object";
-        return {};
-    }
-    auto obj = doc.object();
+    auto obj = doc.value();
     return {
-        Json::ensureString(obj, "device_code"),       Json::ensureString(obj, "user_code"), Json::ensureString(obj, "verification_uri"),
-        Json::ensureInteger(obj, "expires_in"),       Json::ensureInteger(obj, "interval"), Json::ensureString(obj, "error"),
-        Json::ensureString(obj, "error_description"),
+        .device_code = obj["device_code"].toString(),
+        .user_code = obj["user_code"].toString(),
+        .verification_uri = obj["verification_uri"].toString(),
+        .expires_in = obj["expires_in"].toInt(),
+        .interval = obj["interval"].toInt(),
+        .error = obj["error"].toString(),
+        .error_description = obj["error_description"].toString(),
     };
 }
 
-void MSADeviceCodeStep::deviceAuthorizationFinished()
+void MSADeviceCodeStep::deviceAuthorizationFinished(QByteArray* response)
 {
-    auto rsp = parseDeviceAuthorizationResponse(*m_response);
+    if (!m_request->wasSuccessful() || m_request->error() != QNetworkReply::NoError) {
+        qWarning() << "Device authorization failed:" << m_request->error() << m_request->errorString();
+        emit finished(AccountTaskState::STATE_FAILED_HARD, tr("Device authorization failed: %1").arg(m_request->errorString()));
+        return;
+    }
+
+    auto rsp = parseDeviceAuthorizationResponse(*response);
     if (!rsp.error.isEmpty() || !rsp.error_description.isEmpty()) {
         qWarning() << "Device authorization failed:" << rsp.error;
         emit finished(AccountTaskState::STATE_FAILED_HARD,
                       tr("Device authorization failed: %1").arg(rsp.error_description.isEmpty() ? rsp.error : rsp.error_description));
         return;
     }
-    if (!m_request->wasSuccessful() || m_request->error() != QNetworkReply::NoError) {
-        emit finished(AccountTaskState::STATE_FAILED_HARD, tr("Failed to retrieve device authorization"));
-        qDebug() << *m_response;
-        return;
-    }
-
     if (rsp.device_code.isEmpty() || rsp.user_code.isEmpty() || rsp.verification_uri.isEmpty() || rsp.expires_in == 0) {
+        qWarning() << "Device authorization failed: required fields missing";
         emit finished(AccountTaskState::STATE_FAILED_HARD, tr("Device authorization failed: required fields missing"));
         return;
     }
@@ -152,7 +153,6 @@ void MSADeviceCodeStep::abort()
         m_request->abort();
     }
     m_is_aborted = true;
-    emit finished(AccountTaskState::STATE_FAILED_HARD, tr("Task aborted"));
 }
 
 void MSADeviceCodeStep::startPoolTimer()
@@ -181,11 +181,11 @@ void MSADeviceCodeStep::authenticateUser()
         { "Content-Type", "application/x-www-form-urlencoded" },
         { "Accept", "application/json" },
     };
-    m_response.reset(new QByteArray());
-    m_request = Net::Upload::makeByteArray(url, m_response, payload);
-    m_request->addHeaderProxy(new Net::RawHeaderProxy(headers));
+    auto [request, response] = Net::Request::makeByteArray(url, payload);
+    m_request = request;
+    m_request->addHeaderProxy(std::make_unique<Net::RawHeaderProxy>(headers));
 
-    connect(m_request.get(), &Task::finished, this, &MSADeviceCodeStep::authenticationFinished);
+    connect(m_request.get(), &Task::finished, this, [this, response] { authenticationFinished(response); });
 
     m_request->setNetwork(APPLICATION->network());
     m_request->start();
@@ -205,28 +205,23 @@ struct AuthenticationResponse {
 
 AuthenticationResponse parseAuthenticationResponse(const QByteArray& data)
 {
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(data, &err);
-    if (err.error != QJsonParseError::NoError) {
-        qWarning() << "Failed to parse device authorization response due to err:" << err.errorString();
+    auto doc = Json::requireObject(data, "authentication response");
+    if (!doc) {
+        qWarning() << "Failed to parse device authorization response due to err:" << doc.error();
         return {};
     }
 
-    if (!doc.isObject()) {
-        qWarning() << "Device authorization response is not an object";
-        return {};
-    }
-    auto obj = doc.object();
-    return { Json::ensureString(obj, "access_token"),
-             Json::ensureString(obj, "token_type"),
-             Json::ensureString(obj, "refresh_token"),
-             Json::ensureInteger(obj, "expires_in"),
-             Json::ensureString(obj, "error"),
-             Json::ensureString(obj, "error_description"),
-             obj.toVariantMap() };
+    auto obj = doc.value();
+    return { .access_token = obj["access_token"].toString(),
+             .token_type = obj["token_type"].toString(),
+             .refresh_token = obj["refresh_token"].toString(),
+             .expires_in = obj["expires_in"].toInt(),
+             .error = obj["error"].toString(),
+             .error_description = obj["error_description"].toString(),
+             .extra = obj.toVariantMap() };
 }
 
-void MSADeviceCodeStep::authenticationFinished()
+void MSADeviceCodeStep::authenticationFinished(QByteArray* response)
 {
     if (m_request->error() == QNetworkReply::TimeoutError) {
         // rfc8628#section-3.5
@@ -238,7 +233,7 @@ void MSADeviceCodeStep::authenticationFinished()
         startPoolTimer();
         return;
     }
-    auto rsp = parseAuthenticationResponse(*m_response);
+    auto rsp = parseAuthenticationResponse(*response);
     if (rsp.error == "slow_down") {
         // rfc8628#section-3.5
         // "A variant of 'authorization_pending', the authorization request is
@@ -273,5 +268,5 @@ void MSADeviceCodeStep::authenticationFinished()
     m_data->msaToken.extra = rsp.extra;
     m_data->msaToken.refresh_token = rsp.refresh_token;
     m_data->msaToken.token = rsp.access_token;
-    emit finished(AccountTaskState::STATE_WORKING, tr("Got"));
+    emit finished(AccountTaskState::STATE_WORKING, tr("Got MSA token"));
 }

@@ -1,7 +1,6 @@
 // Licensed under the Apache-2.0 license. See README.md for details.
 
 #include "ProgressWidget.h"
-#include <QEventLoop>
 #include <QLabel>
 #include <QProgressBar>
 #include <QVBoxLayout>
@@ -39,7 +38,7 @@ void ProgressWidget::progressFormat(QString format)
         m_bar->setFormat(format);
 }
 
-void ProgressWidget::watch(const Task* task)
+void ProgressWidget::watch(Task* task)
 {
     if (!task)
         return;
@@ -61,25 +60,11 @@ void ProgressWidget::watch(const Task* task)
         connect(m_task, &Task::started, this, &ProgressWidget::show);
 }
 
-void ProgressWidget::start(const Task* task)
+void ProgressWidget::start(Task* task)
 {
     watch(task);
     if (!m_task->isRunning())
-        QMetaObject::invokeMethod(const_cast<Task*>(m_task), "start", Qt::QueuedConnection);
-}
-
-bool ProgressWidget::exec(std::shared_ptr<Task> task)
-{
-    QEventLoop loop;
-
-    connect(task.get(), &Task::finished, &loop, &QEventLoop::quit);
-
-    start(task.get());
-
-    if (task->isRunning())
-        loop.exec();
-
-    return task->wasSuccessful();
+        QMetaObject::invokeMethod(m_task, "start", Qt::QueuedConnection);
 }
 
 void ProgressWidget::show()

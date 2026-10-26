@@ -45,14 +45,16 @@
 class ModFolderPage : public ExternalResourcesPage {
     Q_OBJECT
 
+    inline bool handleNoModLoader();
+
    public:
-    explicit ModFolderPage(BaseInstance* inst, std::shared_ptr<ModFolderModel> model, QWidget* parent = nullptr);
+    explicit ModFolderPage(MinecraftInstance* inst, ModFolderModel* model, QWidget* parent = nullptr);
     virtual ~ModFolderPage() = default;
 
     void setFilter(const QString& filter) { m_fileSelectionFilter = filter; }
 
     virtual QString displayName() const override { return tr("Mods"); }
-    virtual QIcon icon() const override { return APPLICATION->getThemedIcon("loadermods"); }
+    virtual QIcon icon() const override { return QIcon::fromTheme("loadermods"); }
     virtual QString id() const override { return "mods"; }
     virtual QString helpPage() const override { return "Loader-mods"; }
 
@@ -66,24 +68,24 @@ class ModFolderPage : public ExternalResourcesPage {
 
     void downloadMods();
     void downloadDialogFinished(int result);
-    void updateMods(bool includeDeps = false);
+    void updateMods(bool includeDeps = false, std::vector<ModPlatform::IndexedVersionType> releaseTypes = {});
     void deleteModMetadata();
     void exportModMetadata();
     void changeModVersion();
 
    protected:
-    std::shared_ptr<ModFolderModel> m_model;
-    QPointer<ResourceDownload::ModDownloadDialog> m_downloadDialog;
+    ModFolderModel* m_model;
+    QPointer<ResourceDownload::ResourceDownloadDialog> m_downloadDialog;
 };
 
 class CoreModFolderPage : public ModFolderPage {
     Q_OBJECT
    public:
-    explicit CoreModFolderPage(BaseInstance* inst, std::shared_ptr<ModFolderModel> mods, QWidget* parent = 0);
+    explicit CoreModFolderPage(MinecraftInstance* inst, ModFolderModel* mods, QWidget* parent = 0);
     virtual ~CoreModFolderPage() = default;
 
-    virtual QString displayName() const override { return tr("Core mods"); }
-    virtual QIcon icon() const override { return APPLICATION->getThemedIcon("coremods"); }
+    virtual QString displayName() const override { return tr("Core Mods"); }
+    virtual QIcon icon() const override { return QIcon::fromTheme("coremods"); }
     virtual QString id() const override { return "coremods"; }
     virtual QString helpPage() const override { return "Core-mods"; }
 
@@ -93,11 +95,11 @@ class CoreModFolderPage : public ModFolderPage {
 class NilModFolderPage : public ModFolderPage {
     Q_OBJECT
    public:
-    explicit NilModFolderPage(BaseInstance* inst, std::shared_ptr<ModFolderModel> mods, QWidget* parent = 0);
+    explicit NilModFolderPage(MinecraftInstance* inst, ModFolderModel* mods, QWidget* parent = 0);
     virtual ~NilModFolderPage() = default;
 
     virtual QString displayName() const override { return tr("Nilmods"); }
-    virtual QIcon icon() const override { return APPLICATION->getThemedIcon("coremods"); }
+    virtual QIcon icon() const override { return QIcon::fromTheme("coremods"); }
     virtual QString id() const override { return "nilmods"; }
     virtual QString helpPage() const override { return "Nilmods"; }
 

@@ -26,7 +26,7 @@
 
 #include "Application.h"
 
-#include "net/ApiDownload.h"
+#include "net/ApiRequest.h"
 #include "net/NetJob.h"
 
 enum FormatProperties { ImageData = QTextFormat::UserProperty + 1 };
@@ -141,7 +141,7 @@ void VariableSizedImageObject::loadImage(QTextDocument* doc, std::shared_ptr<Ima
 
     auto job = new NetJob(QString("Load Image: %1").arg(meta->url.fileName()), APPLICATION->network());
     job->setAskRetry(false);
-    job->addNetAction(Net::ApiDownload::makeCached(meta->url, entry));
+    job->addNetAction(Net::ApiRequest::makeCached(meta->url, entry));
 
     auto full_entry_path = entry->getFullPath();
     auto source_url = meta->url;
@@ -169,7 +169,7 @@ void VariableSizedImageObject::loadImage(QTextDocument* doc, std::shared_ptr<Ima
         loadImage(image);
     });
     connect(job, &NetJob::failed, this, [this, full_entry_path, source_url, loadImage](QString reason) {
-        qWarning() << "Failed resource at:" << full_entry_path << " because:" << reason;
+        qWarning() << "Failed resource at:" << full_entry_path << "because:" << reason;
         // If we flushed, don't proceed.
         if (!m_fetching_images.contains(source_url))
             return;

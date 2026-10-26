@@ -48,37 +48,37 @@ QString downloadTypeToString(DownloadType javaDownload)
     }
     return "unknown";
 }
-MetadataPtr parseJavaMeta(const QJsonObject& in)
+Result<MetadataPtr> parseJavaMeta(const QJsonObject& in)
 {
     auto meta = std::make_shared<Metadata>();
 
-    meta->m_name = Json::ensureString(in, "name", "");
-    meta->vendor = Json::ensureString(in, "vendor", "");
-    meta->url = Json::ensureString(in, "url", "");
-    meta->releaseTime = timeFromS3Time(Json::ensureString(in, "releaseTime", ""));
-    meta->downloadType = parseDownloadType(Json::ensureString(in, "downloadType", ""));
-    meta->packageType = Json::ensureString(in, "packageType", "");
-    meta->runtimeOS = Json::ensureString(in, "runtimeOS", "unknown");
+    meta->m_name = in["name"].toString("");
+    meta->vendor = in["vendor"].toString("");
+    meta->url = in["url"].toString("");
+    meta->releaseTime = timeFromS3Time(in["releaseTime"].toString(""));
+    meta->downloadType = parseDownloadType(in["downloadType"].toString(""));
+    meta->packageType = in["packageType"].toString("");
+    meta->runtimeOS = in["runtimeOS"].toString("unknown");
 
     if (in.contains("checksum")) {
-        auto obj = Json::requireObject(in, "checksum");
-        meta->checksumHash = Json::ensureString(obj, "hash", "");
-        meta->checksumType = Json::ensureString(obj, "type", "");
+        TRY_INTO(const auto& checksum, Json::requireObject(in, "checksum"))
+        meta->checksumHash = checksum["hash"].toString("");
+        meta->checksumType = checksum["type"].toString("");
     }
 
     if (in.contains("version")) {
-        auto obj = Json::requireObject(in, "version");
-        auto name = Json::ensureString(obj, "name", "");
-        auto major = Json::ensureInteger(obj, "major", 0);
-        auto minor = Json::ensureInteger(obj, "minor", 0);
-        auto security = Json::ensureInteger(obj, "security", 0);
-        auto build = Json::ensureInteger(obj, "build", 0);
+        TRY_INTO(const auto& version, Json::requireObject(in, "version"))
+        const auto name = version["name"].toString("");
+        const auto major = version["major"].toInteger();
+        const auto minor = version["minor"].toInteger();
+        const auto security = version["security"].toInteger();
+        const auto build = version["build"].toInteger();
         meta->version = JavaVersion(major, minor, security, build, name);
     }
     return meta;
 }
 
-bool Metadata::operator<(const Metadata& rhs)
+bool Metadata::operator<(const Metadata& rhs) const
 {
     auto id = version;
     if (id < rhs.version) {
@@ -97,32 +97,30 @@ bool Metadata::operator<(const Metadata& rhs)
     return StringUtils::naturalCompare(m_name, rhs.m_name, Qt::CaseInsensitive) < 0;
 }
 
-bool Metadata::operator==(const Metadata& rhs)
+bool Metadata::operator==(const Metadata& rhs) const
 {
     return version == rhs.version && m_name == rhs.m_name;
 }
 
-bool Metadata::operator>(const Metadata& rhs)
+bool Metadata::operator>(const Metadata& rhs) const
 {
     return (!operator<(rhs)) && (!operator==(rhs));
 }
 
-bool Metadata::operator<(BaseVersion& a)
+bool Metadata::operator<(BaseVersion& a) const
 {
-    try {
-        return operator<(dynamic_cast<Metadata&>(a));
-    } catch (const std::bad_cast& e) {
-        return BaseVersion::operator<(a);
+    if (auto* metadata = dynamic_cast<Metadata*>(&a)) {
+        return operator<(*metadata);
     }
+    return BaseVersion::operator<(a);
 }
 
-bool Metadata::operator>(BaseVersion& a)
+bool Metadata::operator>(BaseVersion& a) const
 {
-    try {
-        return operator>(dynamic_cast<Metadata&>(a));
-    } catch (const std::bad_cast& e) {
-        return BaseVersion::operator>(a);
+    if (auto* metadata = dynamic_cast<Metadata*>(&a)) {
+        return operator>(*metadata);
     }
+    return BaseVersion::operator>(a);
 }
 
 }  // namespace Java

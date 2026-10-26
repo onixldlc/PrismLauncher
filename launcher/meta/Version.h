@@ -23,6 +23,7 @@
 #include <QStringList>
 #include <memory>
 
+#include "Result.h"
 #include "minecraft/VersionFile.h"
 
 #include "BaseEntity.h"
@@ -40,8 +41,8 @@ class Version : public QObject, public BaseVersion, public BaseEntity {
     explicit Version(const QString& uid, const QString& version);
     virtual ~Version() = default;
 
-    QString descriptor() override;
-    QString name() override;
+    QString descriptor() const override;
+    QString name() const override;
     QString typeString() const override;
 
     QString uid() const { return m_uid; }
@@ -52,11 +53,11 @@ class Version : public QObject, public BaseVersion, public BaseEntity {
     const Meta::RequireSet& requiredSet() const { return m_requires; }
     VersionFilePtr data() const { return m_data; }
     bool isRecommended() const { return m_recommended; }
-    bool isLoaded() const { return m_data != nullptr && BaseEntity::isLoaded(); }
+    bool isLoaded() const override { return m_data != nullptr && BaseEntity::isLoaded(); }
 
     void merge(const Version::Ptr& other);
     void mergeFromList(const Version::Ptr& other);
-    void parse(const QJsonObject& obj) override;
+    Result<> parse(const QJsonObject& obj) override;
 
     QString localFilename() const override;
 

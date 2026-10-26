@@ -24,32 +24,8 @@
     <property name="bottomMargin">
      <number>0</number>
     </property>
-    <item row="4" column="1" colspan="3">
-     <layout class="QGridLayout" name="gridLayout_2">
-      <item row="0" column="1">
-       <widget class="QLineEdit" name="filterEdit"/>
-      </item>
-      <item row="0" column="0">
-       <widget class="QLabel" name="filterLabel">
-        <property name="text">
-         <string>Filter:</string>
-        </property>
-       </widget>
-      </item>
-     </layout>
-    </item>
-    <item row="2" column="1" colspan="3">
-     <widget class="InfoFrame" name="frame">
-      <property name="sizePolicy">
-       <sizepolicy hsizetype="Preferred" vsizetype="Minimum">
-        <horstretch>0</horstretch>
-        <verstretch>0</verstretch>
-       </sizepolicy>
-      </property>
-     </widget>
-    </item>
-    <item row="1" column="1" colspan="3">
-     <widget class="ModListView" name="treeView">
+    <item row="1" column="1" colspan="2">
+     <widget class="QTreeView" name="treeView">
       <property name="sizePolicy">
        <sizepolicy hsizetype="Expanding" vsizetype="Expanding">
         <horstretch>0</horstretch>
@@ -60,10 +36,45 @@
        <bool>true</bool>
       </property>
       <property name="dragDropMode">
-       <enum>QAbstractItemView::DropOnly</enum>
+       <enum>QAbstractItemView::DragDropMode::DropOnly</enum>
+      </property>
+      <property name="alternatingRowColors">
+       <bool>true</bool>
+      </property>
+      <property name="selectionMode">
+       <enum>QAbstractItemView::SelectionMode::ExtendedSelection</enum>
+      </property>
+      <property name="verticalScrollMode">
+       <enum>QAbstractItemView::ScrollMode::ScrollPerPixel</enum>
+      </property>
+      <property name="rootIsDecorated">
+       <bool>false</bool>
       </property>
       <property name="uniformRowHeights">
        <bool>true</bool>
+      </property>
+      <property name="sortingEnabled">
+       <bool>true</bool>
+      </property>
+      <attribute name="headerStretchLastSection">
+       <bool>false</bool>
+      </attribute>
+     </widget>
+    </item>
+    <item row="2" column="1" colspan="2">
+     <widget class="InfoFrame" name="frame">
+      <property name="sizePolicy">
+       <sizepolicy hsizetype="Preferred" vsizetype="Minimum">
+        <horstretch>0</horstretch>
+        <verstretch>0</verstretch>
+       </sizepolicy>
+      </property>
+     </widget>
+    </item>
+    <item row="3" column="1" colspan="2">
+     <widget class="QLineEdit" name="filterEdit">
+      <property name="placeholderText">
+       <string>Search</string>
       </property>
      </widget>
     </item>
@@ -74,7 +85,7 @@
     <string>Actions</string>
    </property>
    <property name="toolButtonStyle">
-    <enum>Qt::ToolButtonIconOnly</enum>
+    <enum>Qt::ToolButtonStyle::ToolButtonIconOnly</enum>
    </property>
    <property name="useDefaultAction" stdset="0">
     <bool>true</bool>
@@ -92,7 +103,6 @@
    <addaction name="actionDisableItem"/>
    <addaction name="separator"/>
    <addaction name="actionViewHomepage"/>
-   <addaction name="actionViewConfigs"/>
    <addaction name="actionViewFolder"/>
   </widget>
   <action name="actionAddItem">
@@ -179,7 +189,7 @@
     <string>Reset Update Metadata</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionVerifyItemDependencies">
@@ -187,7 +197,7 @@
     <string>Verify Dependencies</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionExportMetadata">
@@ -212,7 +222,7 @@
     <string>Change a resource's version.</string>
    </property>
    <property name="menuRole">
-    <enum>QAction::NoRole</enum>
+    <enum>QAction::MenuRole::NoRole</enum>
    </property>
   </action>
   <action name="actionViewHomepage">
@@ -226,13 +236,24 @@
     <string>View the homepages of all selected items.</string>
    </property>
   </action>
+  <action name="actionLockUpdates">
+   <property name="text">
+    <string>Lock Updates</string>
+   </property>
+   <property name="toolTip">
+    <string>Lock the resource to prevent it from being updated</string>
+   </property>
+  </action>
+  <action name="actionUnlockUpdates">
+   <property name="text">
+    <string>Unlock Updates</string>
+   </property>
+   <property name="toolTip">
+    <string>Unlock the resource to allow it to be updated</string>
+   </property>
+  </action>
  </widget>
  <customwidgets>
-  <customwidget>
-   <class>ModListView</class>
-   <extends>QTreeView</extends>
-   <header>ui/widgets/ModListView.h</header>
-  </customwidget>
   <customwidget>
    <class>InfoFrame</class>
    <extends>QFrame</extends>
@@ -247,7 +268,6 @@
  </customwidgets>
  <tabstops>
   <tabstop>treeView</tabstop>
-  <tabstop>filterEdit</tabstop>
  </tabstops>
  <resources/>
  <connections/>

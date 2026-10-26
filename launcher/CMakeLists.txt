@@ -6,8 +6,6 @@ project(application)
 
 set(CORE_SOURCES
     # LOGIC - Base classes and infrastructure
-    BaseInstaller.h
-    BaseInstaller.cpp
     BaseVersionList.h
     BaseVersionList.cpp
     InstanceList.h
@@ -26,17 +24,21 @@ set(CORE_SOURCES
     NullInstance.h
     MMCZip.h
     MMCZip.cpp
-    Untar.h
-    Untar.cpp
+    archive/ArchiveReader.cpp
+    archive/ArchiveReader.h
+    archive/ArchiveWriter.cpp
+    archive/ArchiveWriter.h
+    archive/ExportToZipTask.cpp
+    archive/ExportToZipTask.h
+    archive/ExtractZipTask.cpp
+    archive/ExtractZipTask.h
     StringUtils.h
     StringUtils.cpp
-    QVariantUtils.h
     RuntimeContext.h
     PSaveFile.h
+    EnumWrapper.h
 
     # Basic instance manipulation tasks (derived from InstanceTask)
-    InstanceCreationTask.h
-    InstanceCreationTask.cpp
     InstanceCopyPrefs.h
     InstanceCopyPrefs.cpp
     InstanceCopyTask.h
@@ -56,7 +58,6 @@ set(CORE_SOURCES
 
     # String filters
     Filter.h
-    Filter.cpp
 
     # JSON parsing helpers
     Json.h
@@ -65,13 +66,11 @@ set(CORE_SOURCES
     FileSystem.h
     FileSystem.cpp
 
-    Exception.h
+    Result.h
+    Handle.h
 
     # RW lock protected map
     RWStorage.h
-
-    # A variable that has an implicit default value and keeps track of changes
-    DefaultVariable.h
 
     # a smart pointer wrapper intended for safer use with Qt signal/slot mechanisms
     QObjectPtr.h
@@ -88,41 +87,30 @@ set(CORE_SOURCES
     Version.h
     Version.cpp
 
-    # A Recursive file system watcher
-    RecursiveFileSystemWatcher.h
-    RecursiveFileSystemWatcher.cpp
-
     # Time
     MMCTime.h
     MMCTime.cpp
 
     MTPixmapCache.h
+
+    # Assertion helper
+    AssertHelpers.h
 )
 if (UNIX AND NOT CYGWIN AND NOT APPLE)
     set(CORE_SOURCES
     ${CORE_SOURCES}
 
-    # MangoHud
-    MangoHud.h
-    MangoHud.cpp
+    # LibraryUtils
+    LibraryUtils.h
+    LibraryUtils.cpp
     )
 endif()
-
-set(PATHMATCHER_SOURCES
-    # Path matchers
-    pathmatcher/FSTreeMatcher.h
-    pathmatcher/IPathMatcher.h
-    pathmatcher/MultiMatcher.h
-    pathmatcher/RegexpMatcher.h
-    pathmatcher/SimplePrefixMatcher.h
-)
 
 set(NET_SOURCES
     # network stuffs
     net/ByteArraySink.h
     net/ChecksumValidator.h
-    net/Download.cpp
-    net/Download.h
+    net/DummySink.h
     net/FileSink.cpp
     net/FileSink.h
     net/HttpMetaCache.cpp
@@ -138,17 +126,13 @@ set(NET_SOURCES
     net/PasteUpload.h
     net/Sink.h
     net/Validator.h
-    net/Upload.cpp
-    net/Upload.h
     net/HeaderProxy.h
     net/RawHeaderProxy.h
     net/ApiHeaderProxy.h
-    net/ApiDownload.h
-    net/ApiDownload.cpp
-    net/ApiUpload.cpp
-    net/ApiUpload.h
-    net/NetRequest.cpp
-    net/NetRequest.h
+    net/ApiRequest.h
+    net/Request.cpp
+    net/Request.h
+    net/RPCSink.h
 )
 
 # Game launch logic
@@ -157,10 +141,8 @@ set(LAUNCH_SOURCES
     launch/steps/CheckJava.h
     launch/steps/LookupServerAddress.cpp
     launch/steps/LookupServerAddress.h
-    launch/steps/PostLaunchCommand.cpp
-    launch/steps/PostLaunchCommand.h
-    launch/steps/PreLaunchCommand.cpp
-    launch/steps/PreLaunchCommand.h
+    launch/steps/LaunchCommand.cpp
+    launch/steps/LaunchCommand.h
     launch/steps/TextPrint.cpp
     launch/steps/TextPrint.h
     launch/steps/QuitAfterGameStop.cpp
@@ -247,18 +229,13 @@ set(MINECRAFT_SOURCES
     minecraft/auth/steps/MSAStep.h
     minecraft/auth/steps/XboxAuthorizationStep.cpp
     minecraft/auth/steps/XboxAuthorizationStep.h
-    minecraft/auth/steps/XboxProfileStep.cpp
-    minecraft/auth/steps/XboxProfileStep.h
     minecraft/auth/steps/XboxUserStep.cpp
     minecraft/auth/steps/XboxUserStep.h
 
-    minecraft/gameoptions/GameOptions.h
-    minecraft/gameoptions/GameOptions.cpp
-
     minecraft/update/AssetUpdateTask.h
     minecraft/update/AssetUpdateTask.cpp
-    minecraft/update/FMLLibrariesTask.cpp
-    minecraft/update/FMLLibrariesTask.h
+    minecraft/update/LegacyFMLLibrariesTask.cpp
+    minecraft/update/LegacyFMLLibrariesTask.h
     minecraft/update/FoldersTask.cpp
     minecraft/update/FoldersTask.h
     minecraft/update/LibrariesTask.cpp
@@ -268,6 +245,10 @@ set(MINECRAFT_SOURCES
     minecraft/launch/ClaimAccount.h
     minecraft/launch/CreateGameFolders.cpp
     minecraft/launch/CreateGameFolders.h
+    minecraft/launch/EnsureAvailableMemory.cpp
+    minecraft/launch/EnsureAvailableMemory.h
+    minecraft/launch/EnsureOfflineLibraries.cpp
+    minecraft/launch/EnsureOfflineLibraries.h
     minecraft/launch/ModMinecraftJar.cpp
     minecraft/launch/ModMinecraftJar.h
     minecraft/launch/ExtractNatives.cpp
@@ -325,6 +306,8 @@ set(MINECRAFT_SOURCES
     minecraft/World.cpp
     minecraft/WorldList.h
     minecraft/WorldList.cpp
+    minecraft/WorldTasks.h
+    minecraft/WorldTasks.cpp
 
     minecraft/mod/MetadataHandler.h
     minecraft/mod/Mod.h
@@ -353,6 +336,7 @@ set(MINECRAFT_SOURCES
     minecraft/mod/TexturePackFolderModel.h
     minecraft/mod/TexturePackFolderModel.cpp
     minecraft/mod/ShaderPackFolderModel.h
+    minecraft/mod/ShaderPackFolderModel.cpp
     minecraft/mod/tasks/ResourceFolderLoadTask.h
     minecraft/mod/tasks/ResourceFolderLoadTask.cpp
     minecraft/mod/tasks/LocalModParseTask.h
@@ -377,12 +361,8 @@ set(MINECRAFT_SOURCES
     minecraft/AssetsUtils.cpp
 
     # Minecraft skins
-    minecraft/skins/CapeChange.cpp
-    minecraft/skins/CapeChange.h
-    minecraft/skins/SkinUpload.cpp
-    minecraft/skins/SkinUpload.h
-    minecraft/skins/SkinDelete.cpp
-    minecraft/skins/SkinDelete.h
+    minecraft/skins/SkinRequests.cpp
+    minecraft/skins/SkinRequests.h
     minecraft/skins/SkinModel.cpp
     minecraft/skins/SkinModel.h
     minecraft/skins/SkinList.cpp
@@ -393,10 +373,8 @@ set(MINECRAFT_SOURCES
 # the screenshots feature
 set(SCREENSHOTS_SOURCES
     screenshots/Screenshot.h
-    screenshots/ImgurUpload.h
-    screenshots/ImgurUpload.cpp
-    screenshots/ImgurAlbumCreation.h
-    screenshots/ImgurAlbumCreation.cpp
+    screenshots/ImgurAPI.h
+    screenshots/ImgurAPI.cpp
 )
 
 set(TASKS_SOURCES
@@ -471,8 +449,6 @@ set(TOOLS_SOURCES
     tools/JProfiler.h
     tools/JVisualVM.cpp
     tools/JVisualVM.h
-    tools/MCEditTool.cpp
-    tools/MCEditTool.h
     tools/GenericProfiler.cpp
     tools/GenericProfiler.h
 )
@@ -498,6 +474,7 @@ set(API_SOURCES
     modplatform/ResourceType.cpp
 
     modplatform/ResourceAPI.h
+    modplatform/ResourceAPI.cpp
 
     modplatform/EnsureMetadataTask.h
     modplatform/EnsureMetadataTask.cpp
@@ -506,10 +483,10 @@ set(API_SOURCES
 
     modplatform/flame/FlameAPI.h
     modplatform/flame/FlameAPI.cpp
+    modplatform/flame/FlamePackIndex.h
+    modplatform/flame/FlamePackIndex.cpp
     modplatform/modrinth/ModrinthAPI.h
     modplatform/modrinth/ModrinthAPI.cpp
-    modplatform/helpers/NetworkResourceAPI.h
-    modplatform/helpers/NetworkResourceAPI.cpp
     modplatform/helpers/HashUtils.h
     modplatform/helpers/HashUtils.cpp
     modplatform/helpers/OverrideUtils.h
@@ -533,12 +510,15 @@ set(FTB_SOURCES
     modplatform/import_ftb/PackInstallTask.cpp
     modplatform/import_ftb/PackHelpers.h
     modplatform/import_ftb/PackHelpers.cpp
+
+    modplatform/ftb/FTBPackInstallTask.h
+    modplatform/ftb/FTBPackInstallTask.cpp
+    modplatform/ftb/FTBPackManifest.h
+    modplatform/ftb/FTBPackManifest.cpp
 )
 
 set(FLAME_SOURCES
     # Flame
-    modplatform/flame/FlamePackIndex.cpp
-    modplatform/flame/FlamePackIndex.h
     modplatform/flame/FlameModIndex.cpp
     modplatform/flame/FlameModIndex.h
     modplatform/flame/PackManifest.h
@@ -556,8 +536,6 @@ set(FLAME_SOURCES
 set(MODRINTH_SOURCES
     modplatform/modrinth/ModrinthPackIndex.cpp
     modplatform/modrinth/ModrinthPackIndex.h
-    modplatform/modrinth/ModrinthPackManifest.cpp
-    modplatform/modrinth/ModrinthPackManifest.h
     modplatform/modrinth/ModrinthCheckUpdate.cpp
     modplatform/modrinth/ModrinthCheckUpdate.h
     modplatform/modrinth/ModrinthInstanceCreationTask.cpp
@@ -602,7 +580,7 @@ set(LINKEXE_SOURCES
     filelink/FileLink.cpp
     FileSystem.h
     FileSystem.cpp
-    Exception.h
+    Result.h
     StringUtils.h
     StringUtils.cpp
     DesktopServices.h
@@ -633,6 +611,10 @@ set(PRISMUPDATER_SOURCES
     # Zip
     MMCZip.h
     MMCZip.cpp
+    archive/ArchiveReader.cpp
+    archive/ArchiveReader.h
+    archive/ArchiveWriter.cpp
+    archive/ArchiveWriter.h
 
     # Time
     MMCTime.h
@@ -640,16 +622,14 @@ set(PRISMUPDATER_SOURCES
 
     net/ByteArraySink.h
     net/ChecksumValidator.h
-    net/Download.cpp
-    net/Download.h
     net/FileSink.cpp
     net/FileSink.h
     net/HttpMetaCache.cpp
     net/HttpMetaCache.h
     net/Logging.h
     net/Logging.cpp
-    net/NetRequest.cpp
-    net/NetRequest.h
+    net/Request.cpp
+    net/Request.h
     net/NetJob.cpp
     net/NetJob.h
     net/NetUtils.h
@@ -662,7 +642,6 @@ set(PRISMUPDATER_SOURCES
     ui/dialogs/ProgressDialog.h
     ui/widgets/SubTaskProgressBar.h
     ui/widgets/SubTaskProgressBar.cpp
-
 )
 
 if(WIN32)
@@ -760,7 +739,6 @@ endif()
 
 set(LOGIC_SOURCES
     ${CORE_SOURCES}
-    ${PATHMATCHER_SOURCES}
     ${NET_SOURCES}
     ${LAUNCH_SOURCES}
     ${UPDATE_SOURCES}
@@ -799,6 +777,8 @@ SET(LAUNCHER_SOURCES
     ApplicationMessage.cpp
     SysInfo.h
     SysInfo.cpp
+    HardwareInfo.cpp
+    HardwareInfo.h
 
     # console utils
     console/Console.h
@@ -815,23 +795,6 @@ SET(LAUNCHER_SOURCES
     KonamiCode.h
     KonamiCode.cpp
 
-    # Bundled resources
-    resources/backgrounds/backgrounds.qrc
-    resources/multimc/multimc.qrc
-    resources/pe_dark/pe_dark.qrc
-    resources/pe_light/pe_light.qrc
-    resources/pe_colored/pe_colored.qrc
-    resources/pe_blue/pe_blue.qrc
-    resources/breeze_dark/breeze_dark.qrc
-    resources/breeze_light/breeze_light.qrc
-    resources/OSX/OSX.qrc
-    resources/iOS/iOS.qrc
-    resources/flat/flat.qrc
-    resources/flat_white/flat_white.qrc
-    resources/documents/documents.qrc
-    resources/shaders/shaders.qrc
-    "${CMAKE_CURRENT_BINARY_DIR}/../${Launcher_Branding_LogoQRC}"
-
     # Icons
     icons/MMCIcon.h
     icons/MMCIcon.cpp
@@ -843,14 +806,20 @@ SET(LAUNCHER_SOURCES
     logs/AnonymizeLog.h
 
     # GUI - windows
-    ui/GuiUtil.h
-    ui/GuiUtil.cpp
     ui/MainWindow.h
     ui/MainWindow.cpp
     ui/InstanceWindow.h
     ui/InstanceWindow.cpp
     ui/ViewLogWindow.h
     ui/ViewLogWindow.cpp
+
+    # GUI - utilities
+    ui/GuiUtil.h
+    ui/GuiUtil.cpp
+    ui/ToolTipFilter.h
+    ui/ToolTipFilter.cpp
+    ui/MultiDecorationItemDelegate.h
+    ui/MultiDecorationItemDelegate.cpp
 
     # FIXME: maybe find a better home for this.
     FileIgnoreProxy.cpp
@@ -899,6 +868,7 @@ SET(LAUNCHER_SOURCES
     ui/themes/CatPainter.h
 
     # Processes
+    LaunchMode.h
     LaunchController.h
     LaunchController.cpp
 
@@ -917,8 +887,6 @@ SET(LAUNCHER_SOURCES
     # GUI - instance pages
     ui/pages/instance/ExternalResourcesPage.cpp
     ui/pages/instance/ExternalResourcesPage.h
-    ui/pages/instance/GameOptionsPage.cpp
-    ui/pages/instance/GameOptionsPage.h
     ui/pages/instance/VersionPage.cpp
     ui/pages/instance/VersionPage.h
     ui/pages/instance/ManagedPackPage.cpp
@@ -989,8 +957,10 @@ SET(LAUNCHER_SOURCES
     ui/pages/modplatform/ResourcePackModel.cpp
 
     # Needed for MOC to find them without a corresponding .cpp
+    ui/pages/modplatform/TexturePackPage.cpp
     ui/pages/modplatform/TexturePackPage.h
     ui/pages/modplatform/TexturePackModel.cpp
+    ui/pages/modplatform/TexturePackModel.h
 
     ui/pages/modplatform/ShaderPackPage.cpp
     ui/pages/modplatform/ShaderPackModel.cpp
@@ -1010,6 +980,13 @@ SET(LAUNCHER_SOURCES
     ui/pages/modplatform/atlauncher/AtlPage.h
     ui/pages/modplatform/atlauncher/AtlUserInteractionSupportImpl.cpp
     ui/pages/modplatform/atlauncher/AtlUserInteractionSupportImpl.h
+
+    ui/pages/modplatform/ftb/FtbFilterModel.cpp
+    ui/pages/modplatform/ftb/FtbFilterModel.h
+    ui/pages/modplatform/ftb/FtbListModel.cpp
+    ui/pages/modplatform/ftb/FtbListModel.h
+    ui/pages/modplatform/ftb/FtbPage.cpp
+    ui/pages/modplatform/ftb/FtbPage.h
 
     ui/pages/modplatform/legacy_ftb/Page.cpp
     ui/pages/modplatform/legacy_ftb/Page.h
@@ -1046,8 +1023,6 @@ SET(LAUNCHER_SOURCES
     ui/pages/modplatform/OptionalModDialog.cpp
     ui/pages/modplatform/OptionalModDialog.h
 
-    ui/pages/modplatform/modrinth/ModrinthResourceModels.cpp
-    ui/pages/modplatform/modrinth/ModrinthResourceModels.h
     ui/pages/modplatform/modrinth/ModrinthResourcePages.cpp
     ui/pages/modplatform/modrinth/ModrinthResourcePages.h
 
@@ -1076,8 +1051,8 @@ SET(LAUNCHER_SOURCES
     ui/dialogs/ImportResourceDialog.h
     ui/dialogs/MSALoginDialog.cpp
     ui/dialogs/MSALoginDialog.h
-    ui/dialogs/OfflineLoginDialog.cpp
-    ui/dialogs/OfflineLoginDialog.h
+    ui/dialogs/NetworkJobFailedDialog.cpp
+    ui/dialogs/NetworkJobFailedDialog.h
     ui/dialogs/NewComponentDialog.cpp
     ui/dialogs/NewComponentDialog.h
     ui/dialogs/NewInstanceDialog.cpp
@@ -1104,6 +1079,10 @@ SET(LAUNCHER_SOURCES
     ui/dialogs/ResourceUpdateDialog.h
     ui/dialogs/InstallLoaderDialog.cpp
     ui/dialogs/InstallLoaderDialog.h
+    ui/dialogs/ChooseOfflineNameDialog.cpp
+    ui/dialogs/ChooseOfflineNameDialog.h
+    ui/dialogs/UntrustedModsDialog.cpp
+    ui/dialogs/UntrustedModsDialog.h
 
     ui/dialogs/skins/SkinManageDialog.cpp
     ui/dialogs/skins/SkinManageDialog.h
@@ -1128,8 +1107,6 @@ SET(LAUNCHER_SOURCES
     ui/widgets/IconLabel.h
     ui/widgets/JavaWizardWidget.cpp
     ui/widgets/JavaWizardWidget.h
-    ui/widgets/LabeledToolButton.cpp
-    ui/widgets/LabeledToolButton.h
     ui/widgets/LanguageSelectionWidget.cpp
     ui/widgets/LanguageSelectionWidget.h
     ui/widgets/LogView.cpp
@@ -1138,8 +1115,6 @@ SET(LAUNCHER_SOURCES
     ui/widgets/InfoFrame.h
     ui/widgets/ModFilterWidget.cpp
     ui/widgets/ModFilterWidget.h
-    ui/widgets/ModListView.cpp
-    ui/widgets/ModListView.h
     ui/widgets/PageContainer.cpp
     ui/widgets/PageContainer.h
     ui/widgets/PageContainer_p.h
@@ -1165,6 +1140,8 @@ SET(LAUNCHER_SOURCES
     ui/widgets/MinecraftSettingsWidget.cpp
     ui/widgets/JavaSettingsWidget.h
     ui/widgets/JavaSettingsWidget.cpp
+    ui/widgets/EditableLabel.h
+    ui/widgets/EditableLabel.cpp
 
     # GUI - instance group view
     ui/instanceview/InstanceProxyModel.cpp
@@ -1196,83 +1173,21 @@ if (NOT Apple)
 )
 endif()
 
+if (APPLE)
+    set(LAUNCHER_SOURCES
+        ${LAUNCHER_SOURCES}
+
+        macsandbox/SecurityBookmarkFileAccess.h
+        macsandbox/SecurityBookmarkFileAccess.mm
+    )
+endif()
+
 if(WIN32)
     set(LAUNCHER_SOURCES
         console/WindowsConsole.h
         console/WindowsConsole.cpp
         ${LAUNCHER_SOURCES}
     )
-endif()
-
-qt_wrap_ui(LAUNCHER_UI
-    ui/MainWindow.ui
-    ui/setupwizard/PasteWizardPage.ui
-    ui/setupwizard/AutoJavaWizardPage.ui
-    ui/setupwizard/LoginWizardPage.ui
-    ui/pages/global/AccountListPage.ui
-    ui/pages/global/JavaPage.ui
-    ui/pages/global/LauncherPage.ui
-    ui/pages/global/APIPage.ui
-    ui/pages/global/ProxyPage.ui
-    ui/pages/global/ExternalToolsPage.ui
-    ui/pages/instance/ExternalResourcesPage.ui
-    ui/pages/instance/NotesPage.ui
-    ui/pages/instance/LogPage.ui
-    ui/pages/instance/ServersPage.ui
-    ui/pages/instance/GameOptionsPage.ui
-    ui/pages/instance/OtherLogsPage.ui
-    ui/pages/instance/VersionPage.ui
-    ui/pages/instance/ManagedPackPage.ui
-    ui/pages/instance/WorldListPage.ui
-    ui/pages/instance/ScreenshotsPage.ui
-    ui/pages/modplatform/atlauncher/AtlOptionalModDialog.ui
-    ui/pages/modplatform/atlauncher/AtlPage.ui
-    ui/pages/modplatform/CustomPage.ui
-    ui/pages/modplatform/ResourcePage.ui
-    ui/pages/modplatform/flame/FlamePage.ui
-    ui/pages/modplatform/legacy_ftb/Page.ui
-    ui/pages/modplatform/import_ftb/ImportFTBPage.ui
-    ui/pages/modplatform/ImportPage.ui
-    ui/pages/modplatform/OptionalModDialog.ui
-    ui/pages/modplatform/modrinth/ModrinthPage.ui
-    ui/pages/modplatform/technic/TechnicPage.ui
-    ui/widgets/CustomCommands.ui
-    ui/widgets/EnvironmentVariables.ui
-    ui/widgets/InfoFrame.ui
-    ui/widgets/ModFilterWidget.ui
-    ui/widgets/SubTaskProgressBar.ui
-    ui/widgets/AppearanceWidget.ui
-    ui/widgets/MinecraftSettingsWidget.ui
-    ui/widgets/JavaSettingsWidget.ui
-    ui/dialogs/CopyInstanceDialog.ui
-    ui/dialogs/CreateShortcutDialog.ui
-    ui/dialogs/ProfileSetupDialog.ui
-    ui/dialogs/ProgressDialog.ui
-    ui/dialogs/NewInstanceDialog.ui
-    ui/dialogs/NewComponentDialog.ui
-    ui/dialogs/NewsDialog.ui
-    ui/dialogs/ProfileSelectDialog.ui
-    ui/dialogs/ExportInstanceDialog.ui
-    ui/dialogs/ExportPackDialog.ui
-    ui/dialogs/ExportToModListDialog.ui
-    ui/dialogs/IconPickerDialog.ui
-    ui/dialogs/ImportResourceDialog.ui
-    ui/dialogs/MSALoginDialog.ui
-    ui/dialogs/OfflineLoginDialog.ui
-    ui/dialogs/AboutDialog.ui
-    ui/dialogs/ReviewMessageBox.ui
-    ui/dialogs/ScrollMessageBox.ui
-    ui/dialogs/BlockedModsDialog.ui
-    ui/dialogs/ChooseProviderDialog.ui
-    ui/dialogs/skins/SkinManageDialog.ui
-)
-
-qt_wrap_ui(PRISM_UPDATE_UI
-    ui/dialogs/UpdateAvailableDialog.ui
-)
-
-if (NOT Apple)
-    set (LAUNCHER_UI ${LAUNCHER_UI} ${PRISM_UPDATE_UI})
 endif()
 
 qt_add_resources(LAUNCHER_RESOURCES
@@ -1284,18 +1199,11 @@ qt_add_resources(LAUNCHER_RESOURCES
     resources/pe_blue/pe_blue.qrc
     resources/breeze_dark/breeze_dark.qrc
     resources/breeze_light/breeze_light.qrc
-    resources/OSX/OSX.qrc
-    resources/iOS/iOS.qrc
     resources/flat/flat.qrc
+    resources/flat_white/flat_white.qrc
     resources/documents/documents.qrc
     resources/shaders/shaders.qrc
     "${CMAKE_CURRENT_BINARY_DIR}/../${Launcher_Branding_LogoQRC}"
-)
-
-qt_wrap_ui(PRISMUPDATER_UI
-    updater/prismupdater/SelectReleaseDialog.ui
-    ui/widgets/SubTaskProgressBar.ui
-    ui/dialogs/ProgressDialog.ui
 )
 
 ######## Windows resource files ########
@@ -1303,36 +1211,59 @@ if(WIN32)
     set(LAUNCHER_RCS ${CMAKE_CURRENT_BINARY_DIR}/../${Launcher_Branding_WindowsRC})
 endif()
 
-include(CompilerWarnings)
+######## Precompiled Headers ###########
+
+if(${Launcher_USE_PCH})
+    message(STATUS "Using precompiled headers for applicable launcher targets")
+    set(PRECOMPILED_HEADERS
+        include/base.pch.hpp
+        include/qtcore.pch.hpp
+        include/qtgui.pch.hpp
+    )
+endif()
+
+####### Targets ########
 
 # Add executable
-add_library(Launcher_logic STATIC ${LOGIC_SOURCES} ${LAUNCHER_SOURCES} ${LAUNCHER_UI} ${LAUNCHER_RESOURCES})
-set_project_warnings(Launcher_logic
-    "${Launcher_MSVC_WARNINGS}"
-    "${Launcher_CLANG_WARNINGS}"
-    "${Launcher_GCC_WARNINGS}")
+add_library(Launcher_logic STATIC ${LOGIC_SOURCES} ${LAUNCHER_SOURCES} ${LAUNCHER_RESOURCES})
 target_include_directories(Launcher_logic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(Launcher_logic PUBLIC LAUNCHER_APPLICATION)
+
+if(${Launcher_USE_PCH})
+    target_precompile_headers(Launcher_logic PRIVATE ${PRECOMPILED_HEADERS})
+endif()
+
 target_link_libraries(Launcher_logic
-    systeminfo
     Launcher_murmur2
     nbt++
     ${ZLIB_LIBRARIES}
     qdcss
     BuildConfig
     Qt${QT_VERSION_MAJOR}::Widgets
-    qrcodegenerator
 )
+
+if(TARGET PkgConfig::libqrencode)
+    target_link_libraries(Launcher_logic PkgConfig::libqrencode)
+else()
+    target_include_directories(Launcher_logic PRIVATE ${LIBQRENCODE_INCLUDE_DIR})
+    target_link_libraries(Launcher_logic ${LIBQRENCODE_LIBRARY})
+endif()
+
 if(TARGET PkgConfig::tomlplusplus)
     target_link_libraries(Launcher_logic PkgConfig::tomlplusplus)
 else()
     target_link_libraries(Launcher_logic tomlplusplus::tomlplusplus)
 endif()
+if(TARGET PkgConfig::libarchive)
+    target_link_libraries(Launcher_logic PkgConfig::libarchive)
+else()
+    target_link_libraries(Launcher_logic LibArchive::LibArchive)
+endif()
 
-if (UNIX AND NOT CYGWIN AND NOT APPLE)
-    target_link_libraries(Launcher_logic
-        gamemode
-    )
+if (Launcher_ENABLE_GAMEMODE)
+    target_link_libraries(Launcher_logic PkgConfig::gamemode)
+    # Must be public
+    target_compile_definitions(Launcher_logic PUBLIC ENABLE_GAMEMODE)
 endif()
 
 target_link_libraries(Launcher_logic
@@ -1348,13 +1279,12 @@ target_link_libraries(Launcher_logic
     ${Launcher_QT_LIBS}
 )
 target_link_libraries(Launcher_logic
-    QuaZip::QuaZip
     cmark::cmark
     LocalPeer
     Launcher_rainbow
 )
 if (TARGET ${Launcher_QT_DBUS})
-    add_compile_definitions(WITH_QTDBUS)
+    target_compile_definitions(Launcher_logic PUBLIC WITH_QTDBUS)
 endif()
 
 if(APPLE)
@@ -1380,9 +1310,16 @@ if(APPLE)
     endif()
 endif()
 
-target_link_libraries(Launcher_logic)
-
 add_executable(${Launcher_Name} MACOSX_BUNDLE WIN32 main.cpp ${LAUNCHER_RCS})
+target_link_options(${Launcher_Name} PRIVATE
+    # /MANIFEST:NO disables generating a manifest file, we instead provide our own
+    $<$<STREQUAL:${CMAKE_CXX_COMPILER_FRONTEND_VARIANT},MSVC>:/MANIFEST:NO>
+)
+
+if(${Launcher_USE_PCH})
+    target_precompile_headers(${Launcher_Name} REUSE_FROM Launcher_logic)
+endif()
+
 target_link_libraries(${Launcher_Name} Launcher_logic)
 
 if(DEFINED Launcher_APP_BINARY_NAME)
@@ -1406,18 +1343,21 @@ install(TARGETS ${Launcher_Name}
 )
 
 # Deploy PDBs
-if(WIN32 AND (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"))
-    install(FILES $<TARGET_PDB_FILE:${Launcher_Name}> DESTINATION ${BINARY_DEST_DIR})
+if(CMAKE_CXX_LINKER_SUPPORTS_PDB)
+    install(FILES $<TARGET_PDB_FILE:${Launcher_Name}> DESTINATION ${BINARY_DEST_DIR} OPTIONAL)
 endif()
 
 if(Launcher_BUILD_UPDATER)
     # Updater
-    add_library(prism_updater_logic STATIC ${PRISMUPDATER_SOURCES} ${TASKS_SOURCES} ${PRISMUPDATER_UI})
+    add_library(prism_updater_logic STATIC ${PRISMUPDATER_SOURCES} ${TASKS_SOURCES})
     target_include_directories(prism_updater_logic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+    if(${Launcher_USE_PCH})
+        target_precompile_headers(prism_updater_logic PRIVATE ${PRECOMPILED_HEADERS})
+    endif()
+
     target_link_libraries(prism_updater_logic
-        QuaZip::QuaZip
         ${ZLIB_LIBRARIES}
-        systeminfo
         BuildConfig
         Qt${QT_VERSION_MAJOR}::Widgets
         Qt${QT_VERSION_MAJOR}::Core
@@ -1425,10 +1365,19 @@ if(Launcher_BUILD_UPDATER)
         ${Launcher_QT_LIBS}
         cmark::cmark
     )
+    if(TARGET PkgConfig::libarchive)
+        target_link_libraries(prism_updater_logic PkgConfig::libarchive)
+    else()
+        target_link_libraries(prism_updater_logic LibArchive::LibArchive)
+    endif()
 
     add_executable("${Launcher_Name}_updater" WIN32 updater/prismupdater/updater_main.cpp)
     target_sources("${Launcher_Name}_updater" PRIVATE updater/prismupdater/updater.exe.manifest)
     target_link_libraries("${Launcher_Name}_updater" prism_updater_logic)
+
+    if(${Launcher_USE_PCH})
+        target_precompile_headers("${Launcher_Name}_updater" REUSE_FROM prism_updater_logic)
+    endif()
 
     if(DEFINED Launcher_APP_BINARY_NAME)
         set_target_properties("${Launcher_Name}_updater" PROPERTIES OUTPUT_NAME "${Launcher_APP_BINARY_NAME}_updater")
@@ -1445,22 +1394,22 @@ if(Launcher_BUILD_UPDATER)
     )
 
     # Deploy PDBs
-    if(WIN32 AND (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"))
-        install(FILES $<TARGET_PDB_FILE:${Launcher_Name}_updater> DESTINATION ${BINARY_DEST_DIR})
+    if(CMAKE_CXX_LINKER_SUPPORTS_PDB)
+        install(FILES $<TARGET_PDB_FILE:${Launcher_Name}_updater> DESTINATION ${BINARY_DEST_DIR} OPTIONAL)
     endif()
 endif()
 
 if(WIN32 OR (DEFINED Launcher_BUILD_FILELINKER AND Launcher_BUILD_FILELINKER))
     # File link
     add_library(filelink_logic STATIC ${LINKEXE_SOURCES})
-    set_project_warnings(filelink_logic
-    "${Launcher_MSVC_WARNINGS}"
-    "${Launcher_CLANG_WARNINGS}"
-    "${Launcher_GCC_WARNINGS}")
 
     target_include_directories(filelink_logic PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+    if(${Launcher_USE_PCH})
+        target_precompile_headers(filelink_logic PRIVATE ${PRECOMPILED_HEADERS})
+    endif()
+
     target_link_libraries(filelink_logic
-        systeminfo
         BuildConfig
         Qt${QT_VERSION_MAJOR}::Widgets
         Qt${QT_VERSION_MAJOR}::Core
@@ -1470,8 +1419,12 @@ if(WIN32 OR (DEFINED Launcher_BUILD_FILELINKER AND Launcher_BUILD_FILELINKER))
     )
 
     add_executable("${Launcher_Name}_filelink" WIN32 filelink/filelink_main.cpp)
-
     target_sources("${Launcher_Name}_filelink" PRIVATE filelink/filelink.exe.manifest)
+
+    if(${Launcher_USE_PCH})
+        target_precompile_headers("${Launcher_Name}_filelink" REUSE_FROM filelink_logic)
+    endif()
+
     # HACK: Fix manifest issues with Ninja in release mode (and only release mode) and MSVC
     # I have no idea why this works or why it's needed. UPDATE THIS IF YOU EDIT THE MANIFEST!!! -@getchoo
     # Thank you 2018 CMake mailing list thread https://cmake.cmake.narkive.com/LnotZXus/conflicting-msvc-manifests
@@ -1496,8 +1449,8 @@ if(WIN32 OR (DEFINED Launcher_BUILD_FILELINKER AND Launcher_BUILD_FILELINKER))
     )
 
     # Deploy PDBs
-    if(WIN32 AND (CMAKE_BUILD_TYPE STREQUAL "Debug" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo"))
-        install(FILES $<TARGET_PDB_FILE:${Launcher_Name}_filelink> DESTINATION ${BINARY_DEST_DIR})
+    if(CMAKE_CXX_LINKER_SUPPORTS_PDB)
+        install(FILES $<TARGET_PDB_FILE:${Launcher_Name}_filelink> DESTINATION ${BINARY_DEST_DIR} OPTIONAL)
     endif()
 endif()
 
@@ -1507,6 +1460,26 @@ if (UNIX AND APPLE AND Launcher_ENABLE_UPDATER)
     # the framework aren't installed
     install(DIRECTORY ${MACOSX_SPARKLE_DIR}/Sparkle.framework DESTINATION ${FRAMEWORK_DEST_DIR} USE_SOURCE_PERMISSIONS)
 endif()
+
+# Set basic compiler warning/error flags for all targets
+get_directory_property(Launcher_TARGETS BUILDSYSTEM_TARGETS)
+foreach(target ${Launcher_TARGETS})
+    # TODO: Fix unused parameter warnings (/wd4100, -Wno-unused-parameter, etc)
+    target_compile_options(${target} PRIVATE
+        $<IF:$<STREQUAL:${CMAKE_CXX_COMPILER_FRONTEND_VARIANT},MSVC>,/W4 /permissive- /wd4100,-Wall -Wextra -Wpedantic -Wno-unused-parameter -Wno-missing-field-initializers>
+    )
+    # /STACK sets the stack reserve size, ATL's pack list needs 3-4 MiB as of November 2022, provide 8 MiB
+    target_link_options(${target} PRIVATE $<$<STREQUAL:${CMAKE_CXX_COMPILER_FRONTEND_VARIANT},MSVC>:/STACK:8388608>)
+endforeach()
+
+set_target_properties(${Launcher_TARGETS} PROPERTIES COMPILE_WARNING_AS_ERROR ${Launcher_WARNING_AS_ERROR})
+
+# NOTE: Universal macOS builds (i.e., `CMAKE_OSX_ARCHITECTURES="x86_64;arm64") emit benign warnings for duplicate libraries
+# TODO: Maybe fix this...?
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    set_target_properties(${Launcher_TARGETS} PROPERTIES LINK_WARNING_AS_ERROR ${Launcher_WARNING_AS_ERROR})
+endif()
+
 
 #### The bundle mess! ####
 # Bundle utilities are used to complete packages for different platforms - they add all the libraries that would otherwise be missing on the target system.
@@ -1538,6 +1511,7 @@ if(WIN32 OR (UNIX AND APPLE))
         RUNTIME_DEPENDENCY_SET LAUNCHER_DEPENDENCY_SET
         COMPONENT bundle
         DIRECTORIES
+            $ENV{PATH}
             ${CMAKE_SYSTEM_LIBRARY_PATH}
             ${QT_LIBS_DIR}
             ${QT_LIBEXECS_DIR}
@@ -1569,4 +1543,16 @@ if(WIN32 OR (UNIX AND APPLE))
         DESTINATION ${CMAKE_INSTALL_PREFIX}/${RESOURCES_DEST_DIR}
         COMPONENT bundle
     )
+endif()
+
+find_program(CLANG_FORMAT clang-format OPTIONAL)
+if(CLANG_FORMAT)
+    message(STATUS "Creating clang-format target")
+    add_custom_target(
+        clang-format
+        COMMAND ${CLANG_FORMAT} -i --style=file:${CMAKE_SOURCE_DIR}/.clang-format ${LOGIC_SOURCES} ${LAUNCHER_SOURCES} ${PRISMUPDATER_SOURCES} ${LINKEXE_SOURCES} ${PRECOMPILED_HEADERS}
+        WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
+    )
+else()
+    message(WARNING "Unable to find `clang-format`. Not creating custom target")
 endif()

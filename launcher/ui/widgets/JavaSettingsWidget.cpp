@@ -42,29 +42,31 @@
 #include "Application.h"
 #include "BuildConfig.h"
 #include "FileSystem.h"
+#include "HardwareInfo.h"
 #include "JavaCommon.h"
 #include "java/JavaInstallList.h"
 #include "java/JavaUtils.h"
+#include "minecraft/MinecraftInstance.h"
 #include "settings/Setting.h"
-#include "sys.h"
 #include "ui/dialogs/CustomMessageBox.h"
 #include "ui/dialogs/VersionSelectDialog.h"
 #include "ui/java/InstallJavaDialog.h"
 
 #include "ui_JavaSettingsWidget.h"
 
-JavaSettingsWidget::JavaSettingsWidget(InstancePtr instance, QWidget* parent)
-    : QWidget(parent), m_instance(std::move(instance)), m_ui(new Ui::JavaSettingsWidget)
+JavaSettingsWidget::JavaSettingsWidget(MinecraftInstance* instance, QWidget* parent)
+    : QWidget(parent), m_instance(instance), m_ui(new Ui::JavaSettingsWidget)
 {
     m_ui->setupUi(this);
 
     if (m_instance == nullptr) {
         m_ui->javaDownloadBtn->hide();
         if (BuildConfig.JAVA_DOWNLOADER_ENABLED) {
-            connect(m_ui->autodetectJavaCheckBox, &QCheckBox::stateChanged, this, [this](bool state) {
+            connect(m_ui->autodetectJavaCheckBox, &QCheckBox::checkStateChanged, this, [this](bool state) {
                 m_ui->autodownloadJavaCheckBox->setEnabled(state);
-                if (!state)
+                if (!state) {
                     m_ui->autodownloadJavaCheckBox->setChecked(false);
+                }
             });
         } else {
             m_ui->autodownloadJavaCheckBox->hide();
@@ -79,7 +81,7 @@ JavaSettingsWidget::JavaSettingsWidget(InstancePtr instance, QWidget* parent)
         m_ui->memoryGroupBox->setCheckable(true);
         m_ui->javaArgumentsGroupBox->setCheckable(true);
 
-        SettingsObjectPtr settings = m_instance->settings();
+        SettingsObject* settings = m_instance->settings();
 
         connect(settings->getSetting("OverrideJavaLocation").get(), &Setting::SettingChanged, m_ui->javaInstallationGroupBox,
                 [this, settings] { m_ui->javaInstallationGroupBox->setChecked(settings->get("OverrideJavaLocation").toBool()); });
@@ -87,10 +89,10 @@ JavaSettingsWidget::JavaSettingsWidget(InstancePtr instance, QWidget* parent)
                 [this, settings] { m_ui->javaPathTextBox->setText(settings->get("JavaPath").toString()); });
 
         connect(m_ui->javaDownloadBtn, &QPushButton::clicked, this, [this] {
-            auto javaDialog = new Java::InstallDialog({}, m_instance.get(), this);
+            auto* javaDialog = new Java::InstallDialog({}, m_instance, this);
             javaDialog->exec();
         });
-        connect(m_ui->javaPathTextBox, &QLineEdit::textChanged, [this](QString newValue) {
+        connect(m_ui->javaPathTextBox, &QLineEdit::textChanged, this, [this](const QString& newValue) {
             if (m_instance->settings()->get("JavaPath").toString() != newValue) {
                 m_instance->settings()->set("AutomaticJava", false);
             }
@@ -115,12 +117,13 @@ JavaSettingsWidget::~JavaSettingsWidget()
 
 void JavaSettingsWidget::loadSettings()
 {
-    SettingsObjectPtr settings;
+    SettingsObject* settings = nullptr;
 
-    if (m_instance != nullptr)
+    if (m_instance != nullptr) {
         settings = m_instance->settings();
-    else
+    } else {
         settings = APPLICATION->settings();
+    }
 
     // Java Settings
     m_ui->javaInstallationGroupBox->setChecked(settings->get("OverrideJavaLocation").toBool());
@@ -134,7 +137,7 @@ void JavaSettingsWidget::loadSettings()
     if (m_instance == nullptr) {
         m_ui->skipWizardCheckBox->setChecked(settings->get("IgnoreJavaWizard").toBool());
         m_ui->autodetectJavaCheckBox->setChecked(settings->get("AutomaticJavaSwitch").toBool());
-        m_ui->autodetectJavaCheckBox->stateChanged(m_ui->autodetectJavaCheckBox->isChecked());
+        m_ui->autodownloadJavaCheckBox->setEnabled(m_ui->autodetectJavaCheckBox->isChecked());
         m_ui->autodownloadJavaCheckBox->setChecked(settings->get("AutomaticJavaDownload").toBool());
     }
 
@@ -150,6 +153,7 @@ void JavaSettingsWidget::loadSettings()
         m_ui->maxMemSpinBox->setValue(min);
     }
     m_ui->permGenSpinBox->setValue(settings->get("PermGen").toInt());
+    m_ui->lowMemWarningCheckBox->setChecked(settings->get("LowMemWarning").toBool());
 
     // Java arguments
     m_ui->javaArgumentsGroupBox->setChecked(m_instance == nullptr || settings->get("OverrideJavaArgs").toBool());
@@ -158,20 +162,20 @@ void JavaSettingsWidget::loadSettings()
 
 void JavaSettingsWidget::saveSettings()
 {
-    SettingsObjectPtr settings;
+    SettingsObject* settings = nullptr;
 
-    if (m_instance != nullptr)
+    if (m_instance != nullptr) {
         settings = m_instance->settings();
-    else
+    } else {
         settings = APPLICATION->settings();
-
-    SettingsObject::Lock lock(settings);
+    }
 
     // Java Install Settings
     bool javaInstall = m_instance == nullptr || m_ui->javaInstallationGroupBox->isChecked();
 
-    if (m_instance != nullptr)
+    if (m_instance != nullptr) {
         settings->set("OverrideJavaLocation", javaInstall);
+    }
 
     if (javaInstall) {
         settings->set("JavaPath", m_ui->javaPathTextBox->text());
@@ -190,8 +194,9 @@ void JavaSettingsWidget::saveSettings()
     // Memory
     bool memory = m_instance == nullptr || m_ui->memoryGroupBox->isChecked();
 
-    if (m_instance != nullptr)
+    if (m_instance != nullptr) {
         settings->set("OverrideMemory", memory);
+    }
 
     if (memory) {
         int min = m_ui->minMemSpinBox->value();
@@ -204,17 +209,20 @@ void JavaSettingsWidget::saveSettings()
             settings->set("MaxMemAlloc", min);
         }
         settings->set("PermGen", m_ui->permGenSpinBox->value());
+        settings->set("LowMemWarning", m_ui->lowMemWarningCheckBox->isChecked());
     } else {
         settings->reset("MinMemAlloc");
         settings->reset("MaxMemAlloc");
         settings->reset("PermGen");
+        settings->reset("LowMemWarning");
     }
 
     // Java arguments
     bool javaArgs = m_instance == nullptr || m_ui->javaArgumentsGroupBox->isChecked();
 
-    if (m_instance != nullptr)
+    if (m_instance != nullptr) {
         settings->set("OverrideJavaArgs", javaArgs);
+    }
 
     if (javaArgs) {
         settings->set("JvmArgs", m_ui->jvmArgsTextBox->toPlainText().replace("\n", " "));
@@ -242,15 +250,17 @@ void JavaSettingsWidget::onJavaBrowse()
 
 void JavaSettingsWidget::onJavaTest()
 {
-    if (m_checker != nullptr)
+    if (m_checker != nullptr) {
         return;
+    }
 
     QString jvmArgs;
 
-    if (m_instance == nullptr || m_ui->javaArgumentsGroupBox->isChecked())
+    if (m_instance == nullptr || m_ui->javaArgumentsGroupBox->isChecked()) {
         jvmArgs = m_ui->jvmArgsTextBox->toPlainText().replace("\n", " ");
-    else
+    } else {
         jvmArgs = APPLICATION->settings()->get("JvmArgs").toString();
+    }
 
     m_checker.reset(new JavaCommon::TestCheck(this, m_ui->javaPathTextBox->text(), jvmArgs, m_ui->minMemSpinBox->value(),
                                               m_ui->maxMemSpinBox->value(), m_ui->permGenSpinBox->value()));
@@ -265,7 +275,7 @@ void JavaSettingsWidget::onJavaAutodetect()
         return;
     }
 
-    VersionSelectDialog versionDialog(APPLICATION->javalist().get(), tr("Select a Java version"), this, true);
+    VersionSelectDialog versionDialog(APPLICATION->javalist(), tr("Select a Java version"), this, true);
     versionDialog.setResizeOn(2);
     versionDialog.exec();
 
@@ -285,16 +295,17 @@ void JavaSettingsWidget::onJavaAutodetect()
 }
 void JavaSettingsWidget::updateThresholds()
 {
-    auto sysMiB = Sys::getSystemRam() / Sys::mebibyte;
+    auto sysMiB = HardwareInfo::totalRamMiB();
     unsigned int maxMem = m_ui->maxMemSpinBox->value();
     unsigned int minMem = m_ui->minMemSpinBox->value();
 
     const QString warningColour(QStringLiteral("<span style='color:#f5c211'>%1</span>"));
 
     if (maxMem >= sysMiB) {
-        m_ui->labelMaxMemNotice->setText(QString("<span style='color:red'>%1</span>").arg(tr("Your maximum memory allocation exceeds your system memory capacity.")));
+        m_ui->labelMaxMemNotice->setText(
+            QString("<span style='color:red'>%1</span>").arg(tr("Your maximum memory allocation exceeds your system memory capacity.")));
         m_ui->labelMaxMemNotice->show();
-    } else if (maxMem > (sysMiB * 0.9)) {
+    } else if (static_cast<uint64_t>(maxMem) * 10 > sysMiB * 9) {
         m_ui->labelMaxMemNotice->setText(warningColour.arg(tr("Your maximum memory allocation is close to your system memory capacity.")));
         m_ui->labelMaxMemNotice->show();
     } else if (maxMem < minMem) {

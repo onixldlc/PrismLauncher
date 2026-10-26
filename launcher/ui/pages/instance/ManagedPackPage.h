@@ -6,13 +6,10 @@
 
 #include "BaseInstance.h"
 
+#include "modplatform/ModIndex.h"
 #include "modplatform/modrinth/ModrinthAPI.h"
-#include "modplatform/modrinth/ModrinthPackManifest.h"
 
 #include "modplatform/flame/FlameAPI.h"
-#include "modplatform/flame/FlamePackIndex.h"
-
-#include "net/NetJob.h"
 
 #include "ui/pages/BasePage.h"
 
@@ -29,12 +26,12 @@ class ManagedPackPage : public QWidget, public BasePage {
     Q_OBJECT
 
    public:
-    inline static ManagedPackPage* createPage(BaseInstance* inst, QWidget* parent = nullptr)
+    static ManagedPackPage* createPage(BaseInstance* inst, QWidget* parent = nullptr)
     {
         return ManagedPackPage::createPage(inst, inst->getManagedPackType(), parent);
     }
 
-    static ManagedPackPage* createPage(BaseInstance* inst, QString type, QWidget* parent = nullptr);
+    static ManagedPackPage* createPage(BaseInstance* inst, const QString& type, QWidget* parent = nullptr);
     ~ManagedPackPage() override;
 
     QString displayName() const override;
@@ -57,7 +54,7 @@ class ManagedPackPage : public QWidget, public BasePage {
      */
     virtual QString url() const { return {}; };
 
-    void setInstanceWindow(InstanceWindow* window) { m_instance_window = window; }
+    void setInstanceWindow(InstanceWindow* window) { m_instanceWindow = window; }
 
    public slots:
     /** Gets the current version selection and update the UI, including the update button and the changelog.
@@ -78,7 +75,7 @@ class ManagedPackPage : public QWidget, public BasePage {
     void setFailState();
 
    protected:
-    ManagedPackPage(BaseInstance* inst, InstanceWindow* instance_window, QWidget* parent = nullptr);
+    ManagedPackPage(BaseInstance* inst, InstanceWindow* instanceWindow, QWidget* parent = nullptr);
 
     /** Run the InstanceTask, with a progress dialog and all.
      *  Similar to MainWindow::instanceFromInstanceTask
@@ -87,15 +84,17 @@ class ManagedPackPage : public QWidget, public BasePage {
      */
     bool runUpdateTask(InstanceTask*);
 
+    void updatePack(const QUrl& url, bool trusted, const QString& versionID = {}, const QString& versionName = {});
+
+    void onUpdateTaskCompleted(bool didSucceed) const;
+
    protected:
-    InstanceWindow* m_instance_window = nullptr;
+    InstanceWindow* m_instanceWindow = nullptr;
 
     Ui::ManagedPackPage* ui;
     BaseInstance* m_inst;
 
     bool m_loaded = false;
-
-    void onUpdateTaskCompleted(bool did_succeed) const;
 };
 
 /** Simple page for when we aren't a managed pack. */
@@ -103,8 +102,8 @@ class GenericManagedPackPage final : public ManagedPackPage {
     Q_OBJECT
 
    public:
-    GenericManagedPackPage(BaseInstance* inst, InstanceWindow* instance_window, QWidget* parent = nullptr)
-        : ManagedPackPage(inst, instance_window, parent)
+    GenericManagedPackPage(BaseInstance* inst, InstanceWindow* instanceWindow, QWidget* parent = nullptr)
+        : ManagedPackPage(inst, instanceWindow, parent)
     {}
     ~GenericManagedPackPage() override = default;
 
@@ -116,7 +115,7 @@ class ModrinthManagedPackPage final : public ManagedPackPage {
     Q_OBJECT
 
    public:
-    ModrinthManagedPackPage(BaseInstance* inst, InstanceWindow* instance_window, QWidget* parent = nullptr);
+    ModrinthManagedPackPage(BaseInstance* inst, InstanceWindow* instanceWindow, QWidget* parent = nullptr);
     ~ModrinthManagedPackPage() override = default;
 
     void parseManagedPack() override;
@@ -130,17 +129,16 @@ class ModrinthManagedPackPage final : public ManagedPackPage {
     void updateFromFile() override;
 
    private:
-    NetJob::Ptr m_fetch_job = nullptr;
+    Task::Ptr m_fetchJob = nullptr;
 
-    Modrinth::Modpack m_pack;
-    ModrinthAPI m_api;
+    ModPlatform::IndexedPack m_pack;
 };
 
 class FlameManagedPackPage final : public ManagedPackPage {
     Q_OBJECT
 
    public:
-    FlameManagedPackPage(BaseInstance* inst, InstanceWindow* instance_window, QWidget* parent = nullptr);
+    FlameManagedPackPage(BaseInstance* inst, InstanceWindow* instanceWindow, QWidget* parent = nullptr);
     ~FlameManagedPackPage() override = default;
 
     void parseManagedPack() override;
@@ -154,8 +152,7 @@ class FlameManagedPackPage final : public ManagedPackPage {
     void updateFromFile() override;
 
    private:
-    NetJob::Ptr m_fetch_job = nullptr;
+    Task::Ptr m_fetchJob = nullptr;
 
-    Flame::IndexedPack m_pack;
-    FlameAPI m_api;
+    ModPlatform::IndexedPack m_pack;
 };

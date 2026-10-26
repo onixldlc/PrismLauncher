@@ -3,7 +3,6 @@
 #include <QByteArray>
 #include <QObject>
 #include <QTemporaryDir>
-#include <memory>
 #include "PackHelpers.h"
 #include "net/NetJob.h"
 
@@ -13,26 +12,23 @@ class PackFetchTask : public QObject {
     Q_OBJECT
 
    public:
-    PackFetchTask(shared_qobject_ptr<QNetworkAccessManager> network) : QObject(nullptr), m_network(network) {};
-    virtual ~PackFetchTask() = default;
+    explicit PackFetchTask(QNetworkAccessManager* network) : QObject(nullptr), m_network(network) {};
+    ~PackFetchTask() override = default;
 
     void fetch();
     void fetchPrivate(const QStringList& toFetch);
 
    private:
-    shared_qobject_ptr<QNetworkAccessManager> m_network;
-    NetJob::Ptr jobPtr;
+    QNetworkAccessManager* m_network;
+    NetJob::Ptr m_jobPtr;
 
-    std::shared_ptr<QByteArray> publicModpacksXmlFileData = std::make_shared<QByteArray>();
-    std::shared_ptr<QByteArray> thirdPartyModpacksXmlFileData = std::make_shared<QByteArray>();
-
-    bool parseAndAddPacks(QByteArray& data, PackType packType, ModpackList& list);
-    ModpackList publicPacks;
-    ModpackList thirdPartyPacks;
+    static bool parseAndAddPacks(QByteArray& data, PackType packType, ModpackList& list);
+    ModpackList m_publicPacks;
+    ModpackList m_thirdPartyPacks;
 
    protected slots:
-    void fileDownloadFinished();
-    void fileDownloadFailed(QString reason);
+    void fileDownloadFinished(QByteArray* publicResponse, QByteArray* thirdPartyResponse);
+    void fileDownloadFailed(const QString& reason);
     void fileDownloadAborted();
 
    signals:

@@ -48,14 +48,14 @@
 class TexturePackPage : public ExternalResourcesPage {
     Q_OBJECT
    public:
-    explicit TexturePackPage(MinecraftInstance* instance, std::shared_ptr<TexturePackFolderModel> model, QWidget* parent = nullptr);
+    explicit TexturePackPage(MinecraftInstance* instance, TexturePackFolderModel* model, QWidget* parent = nullptr);
 
     QString displayName() const override { return tr("Texture packs"); }
-    QIcon icon() const override { return APPLICATION->getThemedIcon("resourcepacks"); }
+    QIcon icon() const override { return QIcon::fromTheme("resourcepacks"); }
     QString id() const override { return "texturepacks"; }
     QString helpPage() const override { return "Texture-packs"; }
 
-    virtual bool shouldDisplay() const override { return m_instance->traits().contains("texturepacks"); }
+    bool shouldDisplay() const override { return m_instance->traits().contains("texturepacks"); }
 
    public slots:
     void updateFrame(const QModelIndex& current, const QModelIndex& previous) override;
@@ -66,6 +66,6 @@ class TexturePackPage : public ExternalResourcesPage {
     void changeTexturePackVersion();
 
    private:
-    std::shared_ptr<TexturePackFolderModel> m_model;
-    QPointer<ResourceDownload::TexturePackDownloadDialog> m_downloadDialog;
+    TexturePackFolderModel* m_model;
+    QPointer<ResourceDownload::ResourceDownloadDialog> m_downloadDialog;
 };

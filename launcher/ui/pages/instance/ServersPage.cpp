@@ -36,6 +36,7 @@
  */
 
 #include "ServersPage.h"
+#include "Application.h"
 #include "ServerPingTask.h"
 #include "ui/dialogs/CustomMessageBox.h"
 #include "ui_ServersPage.h"
@@ -111,25 +112,27 @@ struct Server {
     QByteArray m_icon;
 
     // Data - temporary
-    bool m_checked = false;
-    bool m_up = false;
-    QString m_motd;                       // https://mctools.org/motd-creator
     std::optional<int> m_currentPlayers;  // nullopt if not calculated/calculating
-    int m_maxPlayers = 0;
 };
 
 static std::unique_ptr<nbt::tag_compound> parseServersDat(const QString& filename)
 {
     try {
-        QByteArray input = FS::read(filename);
+        auto res = FS::read(filename);
+        if (!res) {
+            return nullptr;
+        }
+        const auto& input = res.value();
         std::istringstream foo(std::string(input.constData(), input.size()));
         auto pair = nbt::io::read_compound(foo);
 
-        if (pair.first != "")
+        if (pair.first != "") {
             return nullptr;
+        }
 
-        if (pair.second == nullptr)
+        if (pair.second == nullptr) {
             return nullptr;
+        }
 
         return std::move(pair.second);
     } catch (...) {
@@ -146,8 +149,8 @@ static bool serializeServerDat(const QString& filename, nbt::tag_compound* level
         std::ostringstream s;
         nbt::io::write_tag("", *levelInfo, s);
         QByteArray val(s.str().data(), (int)s.str().size());
-        FS::write(filename, val);
-        return true;
+        auto res = FS::write(filename, val);
+        return res.has_value();
     } catch (...) {
         return false;
     }
@@ -167,7 +170,7 @@ class ServersModel : public QAbstractListModel {
         connect(m_watcher, &QFileSystemWatcher::directoryChanged, this, &ServersModel::dirChanged);
         m_saveTimer.setSingleShot(true);
         m_saveTimer.setInterval(5000);
-        connect(&m_saveTimer, &QTimer::timeout, this, &ServersModel::save_internal);
+        connect(&m_saveTimer, &QTimer::timeout, this, &ServersModel::saveInternal);
     }
     virtual ~ServersModel() = default;
 
@@ -231,19 +234,26 @@ class ServersModel : public QAbstractListModel {
         return position;
     }
 
-    bool removeRow(int row)
+    bool removeServers(QList<int> rows)
     {
         if (m_locked) {
             return false;
         }
-        if (row < 0 || row >= rowCount()) {
-            return false;
+        std::ranges::sort(rows, std::greater<>());
+        bool removed = false;
+        for (int row : rows) {
+            if (row < 0 || row >= rowCount()) {
+                continue;
+            }
+            beginRemoveRows(QModelIndex(), row, row);
+            m_servers.removeAt(row);
+            endRemoveRows();
+            removed = true;
         }
-        beginRemoveRows(QModelIndex(), row, row);
-        m_servers.removeAt(row);
-        endRemoveRows();  // does absolutely nothing, the selected server stays as the next line...
-        scheduleSave();
-        return true;
+        if (removed) {
+            scheduleSave();
+        }
+        return removed;
     }
 
     bool moveUp(int row)
@@ -311,37 +321,33 @@ class ServersModel : public QAbstractListModel {
 
         switch (role) {
             case Qt::DecorationRole: {
-                switch (column) {
-                    case 0: {
-                        auto& bytes = m_servers[row].m_icon;
-                        if (bytes.size()) {
-                            QPixmap px;
-                            if (px.loadFromData(bytes))
-                                return QIcon(px);
-                        }
-                        return APPLICATION->getThemedIcon("unknown_server");
+                if (column == 0) {
+                    auto& bytes = m_servers[row].m_icon;
+                    if (bytes.size()) {
+                        QPixmap px;
+                        if (px.loadFromData(bytes))
+                            return QIcon(px);
                     }
+                    return QIcon::fromTheme("unknown_server");
+                } else {
+                    return QVariant();
+                }
+            }
+            case Qt::DisplayRole:
+                switch (column) {
+                    case 0:
+                        return m_servers[row].m_name;
                     case 1:
                         return m_servers[row].m_address;
-                    default:
-                        return QVariant();
-                }
-                case 2:
-                    if (role == Qt::DisplayRole) {
+                    case 2:
                         if (m_servers[row].m_currentPlayers) {
                             return *m_servers[row].m_currentPlayers;
                         } else {
                             return "...";
                         }
-                    } else {
+                    default:
                         return QVariant();
-                    }
-            }
-            case Qt::DisplayRole:
-                if (column == 0)
-                    return m_servers[row].m_name;
-                else
-                    return QVariant();
+                }
             case ServerPtrRole:
                 if (column == 0)
                     return QVariant::fromValue<void*>((void*)&m_servers[row]);
@@ -368,7 +374,7 @@ class ServersModel : public QAbstractListModel {
         if (m_locked) {
             return;
         }
-        auto server = at(row);
+        auto* server = at(row);
         if (!server || server->m_name == name) {
             return;
         }
@@ -382,7 +388,7 @@ class ServersModel : public QAbstractListModel {
         if (m_locked) {
             return;
         }
-        auto server = at(row);
+        auto* server = at(row);
         if (!server || server->m_address == address) {
             return;
         }
@@ -396,7 +402,7 @@ class ServersModel : public QAbstractListModel {
         if (m_locked) {
             return;
         }
-        auto server = at(row);
+        auto* server = at(row);
         if (!server || server->m_acceptsTextures == textures) {
             return;
         }
@@ -409,25 +415,31 @@ class ServersModel : public QAbstractListModel {
     {
         cancelSave();
         beginResetModel();
-        QList<Server> servers;
-        auto serversDat = parseServersDat(serversPath());
-        if (serversDat) {
-            auto& serversList = serversDat->at("servers").as<nbt::tag_list>();
-            for (auto iter = serversList.begin(); iter != serversList.end(); iter++) {
-                auto& serverTag = (*iter).as<nbt::tag_compound>();
-                Server s(serverTag);
-                servers.append(s);
+        try {
+            QList<Server> servers;
+            auto serversDat = parseServersDat(serversPath());
+            if (serversDat) {
+                auto& serversList = serversDat->at("servers").as<nbt::tag_list>();
+                for (auto& iter : serversList) {
+                    auto& serverTag = iter.as<nbt::tag_compound>();
+                    Server s(serverTag);
+                    servers.append(s);
+                }
             }
+            m_servers.swap(servers);
+            m_loaded = true;
+        } catch (const std::bad_cast&) {
+            m_loaded = false;
+        } catch (const std::out_of_range&) {
+            m_loaded = false;
         }
-        m_servers.swap(servers);
-        m_loaded = true;
         endResetModel();
     }
 
     void saveNow()
     {
         if (saveIsScheduled()) {
-            save_internal();
+            saveInternal();
         }
     }
 
@@ -454,8 +466,9 @@ class ServersModel : public QAbstractListModel {
 
             // Update the model when the task is done
             connect(task, &Task::finished, this, [this, task, row]() {
-                if (m_servers.size() < row)
+                if (row >= m_servers.size()) {
                     return;
+                }
                 m_servers[row].m_currentPlayers = task->m_outputOnlinePlayers;
                 emit dataChanged(index(row, 0), index(row, COLUMN_COUNT - 1));
             });
@@ -471,10 +484,10 @@ class ServersModel : public QAbstractListModel {
         qDebug() << "Changed:" << path;
         load();
     }
-    void fileChanged(const QString& path) { qDebug() << "Changed:" << path; }
+    static void fileChanged(const QString& path) { qDebug() << "Changed:" << path; }
 
    private slots:
-    void save_internal()
+    void saveInternal()
     {
         cancelSave();
         QString path = serversPath();
@@ -555,31 +568,37 @@ class ServersModel : public QAbstractListModel {
     ConcurrentTask::Ptr m_currentQueryTask = nullptr;
 };
 
-ServersPage::ServersPage(InstancePtr inst, QWidget* parent) : QMainWindow(parent), ui(new Ui::ServersPage)
+ServersPage::ServersPage(MinecraftInstance* inst, QWidget* parent) : QMainWindow(parent), ui(new Ui::ServersPage), m_inst(inst)
 {
     ui->setupUi(this);
-    m_inst = inst;
+
     m_model = new ServersModel(inst->gameRoot(), this);
     ui->serversView->setIconSize(QSize(64, 64));
     ui->serversView->setModel(m_model);
     ui->serversView->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(ui->serversView, &QTreeView::customContextMenuRequested, this, &ServersPage::ShowContextMenu);
+    connect(ui->serversView, &QAbstractItemView::activated, this, [this](const QModelIndex& index) {
+        if (index.isValid() && ui->actionJoin->isEnabled()) {
+            on_actionJoin_triggered();
+        }
+    });
 
-    auto head = ui->serversView->header();
-    if (head->count()) {
+    auto* head = ui->serversView->header();
+    if (head->count() != 0) {
         head->setSectionResizeMode(0, QHeaderView::Stretch);
         for (int i = 1; i < head->count(); i++) {
             head->setSectionResizeMode(i, QHeaderView::ResizeToContents);
         }
     }
 
-    auto selectionModel = ui->serversView->selectionModel();
-    connect(selectionModel, &QItemSelectionModel::currentChanged, this, &ServersPage::currentChanged);
-    connect(m_inst.get(), &MinecraftInstance::runningStatusChanged, this, &ServersPage::runningStateChanged);
+    auto* selectionModel = ui->serversView->selectionModel();
+    connect(selectionModel, &QItemSelectionModel::selectionChanged, this, &ServersPage::selectionChanged);
+    connect(m_model, &QAbstractItemModel::rowsRemoved, this, &ServersPage::selectionChanged);
+    connect(m_model, &QAbstractItemModel::modelReset, this, &ServersPage::selectionChanged);
+    connect(m_inst, &MinecraftInstance::runningStatusChanged, this, &ServersPage::runningStateChanged);
     connect(ui->nameLine, &QLineEdit::textEdited, this, &ServersPage::nameEdited);
     connect(ui->addressLine, &QLineEdit::textEdited, this, &ServersPage::addressEdited);
     connect(ui->resourceComboBox, &QComboBox::currentIndexChanged, this, &ServersPage::resourceIndexChanged);
-    connect(m_model, &QAbstractItemModel::rowsRemoved, this, &ServersPage::rowsRemoved);
 
     m_locked = m_inst->isRunning();
     if (m_locked) {
@@ -602,7 +621,7 @@ void ServersPage::retranslate()
 
 void ServersPage::ShowContextMenu(const QPoint& pos)
 {
-    auto menu = ui->toolBar->createContextMenu(this, tr("Context menu"));
+    auto* menu = ui->toolBar->createContextMenu(this, tr("Context menu"));
     menu->exec(ui->serversView->mapToGlobal(pos));
     delete menu;
 }
@@ -628,32 +647,16 @@ void ServersPage::runningStateChanged(bool running)
     updateState();
 }
 
-void ServersPage::currentChanged(const QModelIndex& current, [[maybe_unused]] const QModelIndex& previous)
+void ServersPage::selectionChanged()
 {
-    int nextServer = -1;
-    if (!current.isValid()) {
-        nextServer = -1;
+    const auto selected = ui->serversView->selectionModel()->selectedRows();
+    const auto index = ui->serversView->selectionModel()->currentIndex();
+    if (index.isValid()) {
+        currentServer = index.row();
     } else {
-        nextServer = current.row();
+        currentServer = -1;
     }
-    currentServer = nextServer;
     updateState();
-}
-
-// WARNING: this is here because currentChanged is not accurate when removing rows. the current item needs to be fixed up after removal.
-void ServersPage::rowsRemoved([[maybe_unused]] const QModelIndex& parent, int first, int last)
-{
-    if (currentServer < first) {
-        // current was before the removal
-        return;
-    } else if (currentServer >= first && currentServer <= last) {
-        // current got removed...
-        return;
-    } else {
-        // current was past the removal
-        int count = last - first + 1;
-        currentServer -= count;
-    }
 }
 
 void ServersPage::nameEdited(const QString& name)
@@ -674,21 +677,23 @@ void ServersPage::resourceIndexChanged(int index)
 
 void ServersPage::updateState()
 {
-    auto server = m_model->at(currentServer);
+    auto* server = m_model->at(currentServer);
+    const auto selectedRows = ui->serversView->selectionModel()->selectedRows();
+    const bool multipleSelection = selectedRows.size() > 1;
 
-    bool serverEditEnabled = server && !m_locked;
+    bool serverEditEnabled = (server != nullptr) && !m_locked && !multipleSelection;
     ui->addressLine->setEnabled(serverEditEnabled);
     ui->nameLine->setEnabled(serverEditEnabled);
     ui->resourceComboBox->setEnabled(serverEditEnabled);
     ui->actionMove_Down->setEnabled(serverEditEnabled);
     ui->actionMove_Up->setEnabled(serverEditEnabled);
-    ui->actionRemove->setEnabled(serverEditEnabled);
+    ui->actionRemove->setEnabled(!m_locked && !selectedRows.isEmpty());
     ui->actionJoin->setEnabled(serverEditEnabled);
 
     if (server) {
         ui->addressLine->setText(server->m_address);
         ui->nameLine->setText(server->m_name);
-        ui->resourceComboBox->setCurrentIndex(int(server->m_acceptsTextures));
+        ui->resourceComboBox->setCurrentIndex(static_cast<int>(server->m_acceptsTextures));
     } else {
         ui->addressLine->setText(QString());
         ui->nameLine->setText(QString());
@@ -702,11 +707,6 @@ void ServersPage::openedImpl()
 {
     m_model->observe();
 
-    auto const setting_name = QString("WideBarVisibility_%1").arg(id());
-    m_wide_bar_setting = APPLICATION->settings()->getOrRegisterSetting(setting_name);
-
-    ui->toolBar->setVisibilityState(QByteArray::fromBase64(m_wide_bar_setting->get().toString().toUtf8()));
-
     // ping servers
     m_model->queryServersStatus();
 }
@@ -714,8 +714,6 @@ void ServersPage::openedImpl()
 void ServersPage::closedImpl()
 {
     m_model->unobserve();
-
-    m_wide_bar_setting->set(QString::fromUtf8(ui->toolBar->getVisibilityState().toBase64()));
 }
 
 void ServersPage::on_actionAdd_triggered()
@@ -732,19 +730,36 @@ void ServersPage::on_actionAdd_triggered()
 
 void ServersPage::on_actionRemove_triggered()
 {
-    auto response =
-        CustomMessageBox::selectable(this, tr("Confirm Removal"),
-                                     tr("You are about to remove \"%1\".\n"
-                                        "This is permanent and the server will be gone from your list forever (A LONG TIME).\n\n"
-                                        "Are you sure?")
-                                         .arg(m_model->at(currentServer)->m_name),
-                                     QMessageBox::Warning, QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
-            ->exec();
-
-    if (response != QMessageBox::Yes)
+    QList<int> rows;
+    for (const auto& index : ui->serversView->selectionModel()->selectedRows()) {
+        rows.append(index.row());
+    }
+    if (rows.isEmpty()) {
         return;
+    }
 
-    m_model->removeRow(currentServer);
+    QString text;
+    if (rows.size() == 1) {
+        text = tr("You are about to remove \"%1\".\n"
+                  "This is permanent and the server will be gone from your list forever (A LONG TIME).\n\n"
+                  "Are you sure?")
+                   .arg(m_model->at(rows.first())->m_name);
+    } else {
+        text = tr("You are about to remove the %1 selected servers."
+                  "This is permanent and the servers will be gone from your list forever (A LONG TIME).\n\n"
+                  "Are you sure?")
+                   .arg(rows.size());
+    }
+
+    auto response = CustomMessageBox::selectable(this, tr("Confirm Removal"), text, QMessageBox::Warning,
+                                                 QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+                        ->exec();
+
+    if (response != QMessageBox::Yes) {
+        return;
+    }
+
+    m_model->removeServers(rows);
 }
 
 void ServersPage::on_actionMove_Up_triggered()
@@ -764,7 +779,7 @@ void ServersPage::on_actionMove_Down_triggered()
 void ServersPage::on_actionJoin_triggered()
 {
     const auto& address = m_model->at(currentServer)->m_address;
-    APPLICATION->launch(m_inst, true, false, std::make_shared<MinecraftTarget>(MinecraftTarget::parse(address, false)));
+    APPLICATION->launch(m_inst, LaunchMode::Normal, std::make_shared<MinecraftTarget>(MinecraftTarget::parse(address, false)));
 }
 
 void ServersPage::on_actionRefresh_triggered()

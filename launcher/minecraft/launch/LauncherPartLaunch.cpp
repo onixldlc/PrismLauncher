@@ -39,30 +39,29 @@
 #include <QStandardPaths>
 
 #include "Application.h"
-#include "Commandline.h"
 #include "FileSystem.h"
 #include "launch/LaunchTask.h"
 #include "minecraft/MinecraftInstance.h"
 
-#ifdef Q_OS_LINUX
+#if defined(Q_OS_LINUX) && defined(ENABLE_GAMEMODE)
 #include "gamemode_client.h"
 #endif
 
 LauncherPartLaunch::LauncherPartLaunch(LaunchTask* parent)
     : LaunchStep(parent)
-    , m_process(parent->instance()->getJavaVersion().defaultsToUtf8() ? QTextCodec::codecForName("UTF-8") : QTextCodec::codecForLocale())
+    , m_process(parent->instance()->getJavaVersion().defaultsToUtf8() ? QStringConverter::Utf8 : QStringConverter::System)
 {
     if (parent->instance()->settings()->get("CloseAfterLaunch").toBool()) {
         static const QRegularExpression s_settingUser(".*Setting user.+", QRegularExpression::CaseInsensitiveOption);
         std::shared_ptr<QMetaObject::Connection> connection{ new QMetaObject::Connection };
-        *connection = connect(&m_process, &LoggedProcess::log, this,
-                              [connection](const QStringList& lines, [[maybe_unused]] MessageLevel::Enum level) {
-                                  qDebug() << lines;
-                                  if (lines.filter(s_settingUser).length() != 0) {
-                                      APPLICATION->closeAllWindows();
-                                      disconnect(*connection);
-                                  }
-                              });
+        *connection =
+            connect(&m_process, &LoggedProcess::log, this, [connection](const QStringList& lines, [[maybe_unused]] MessageLevel level) {
+                qDebug() << lines;
+                if (lines.filter(s_settingUser).length() != 0) {
+                    APPLICATION->closeAllWindows();
+                    disconnect(*connection);
+                }
+            });
     }
 
     connect(&m_process, &LoggedProcess::log, this, &LauncherPartLaunch::logLines);
@@ -79,7 +78,7 @@ void LauncherPartLaunch::executeTask()
         return;
     }
 
-    auto instance = m_parent->instance();
+    auto* instance = m_parent->instance();
 
     QString legacyJarPath;
     if (instance->getLauncher() == "legacy" || instance->shouldApplyOnlineFixes()) {
@@ -94,8 +93,8 @@ void LauncherPartLaunch::executeTask()
 
     m_launchScript = instance->createLaunchScript(m_session, m_targetToJoin);
     QStringList args = instance->javaArguments();
-    QString allArgs = args.join(", ");
-    emit logLine("Java Arguments:\n[" + m_parent->censorPrivateInfo(allArgs) + "]\n\n", MessageLevel::Launcher);
+    QString allArgs = args.join(" ");
+    emit logLine("Java arguments:\n  " + m_parent->censorPrivateInfo(allArgs) + "\n", MessageLevel::Launcher);
 
     auto javaPath = FS::ResolveExecutable(instance->settings()->get("JavaPath").toString());
 
@@ -107,8 +106,9 @@ void LauncherPartLaunch::executeTask()
     auto classPath = instance->getClassPath();
     classPath.prepend(jarPath);
 
-    if (!legacyJarPath.isEmpty())
+    if (!legacyJarPath.isEmpty()) {
         classPath.prepend(legacyJarPath);
+    }
 
     auto natPath = instance->getNativePath();
 #ifdef Q_OS_WIN
@@ -132,8 +132,7 @@ void LauncherPartLaunch::executeTask()
 
     QString wrapperCommandStr = instance->getWrapperCommand().trimmed();
     if (!wrapperCommandStr.isEmpty()) {
-        wrapperCommandStr = m_parent->substituteVariables(wrapperCommandStr);
-        auto wrapperArgs = Commandline::splitArgs(wrapperCommandStr);
+        auto wrapperArgs = m_parent->substituteVariables(wrapperCommandStr);
         auto wrapperCommand = wrapperArgs.takeFirst();
         auto realWrapperCommand = QStandardPaths::findExecutable(wrapperCommand);
         if (realWrapperCommand.isEmpty()) {
@@ -149,11 +148,11 @@ void LauncherPartLaunch::executeTask()
         m_process.start(javaPath, args);
     }
 
-#ifdef Q_OS_LINUX
+#if defined(Q_OS_LINUX) && defined(ENABLE_GAMEMODE)
     if (instance->settings()->get("EnableFeralGamemode").toBool() && APPLICATION->capabilities() & Application::SupportsGameMode) {
         auto pid = m_process.processId();
-        if (pid) {
-            gamemode_request_start_for(pid);
+        if (pid != 0) {
+            gamemode_request_start_for(static_cast<pid_t>(pid));
         }
     }
 #endif
@@ -164,9 +163,9 @@ void LauncherPartLaunch::on_state(LoggedProcess::State state)
     switch (state) {
         case LoggedProcess::FailedToStart: {
             //: Error message displayed if instace can't start
-            const char* reason = QT_TR_NOOP("Could not launch Minecraft!");
-            emit logLine(reason, MessageLevel::Fatal);
-            emitFailed(tr(reason));
+            const char* reason = QT_TR_NOOP("Could not launch Minecraft: %1");
+            emit logLine(QString(reason).arg(m_process.errorString()), MessageLevel::Fatal);
+            emitFailed(tr(reason).arg(m_process.errorString()));
             return;
         }
         case LoggedProcess::Aborted:
@@ -177,9 +176,10 @@ void LauncherPartLaunch::on_state(LoggedProcess::State state)
             return;
         }
         case LoggedProcess::Finished: {
-            auto instance = m_parent->instance();
-            if (instance->settings()->get("CloseAfterLaunch").toBool())
+            auto* instance = m_parent->instance();
+            if (instance->settings()->get("CloseAfterLaunch").toBool()) {
                 APPLICATION->showMainWindow();
+            }
 
             m_parent->setPid(-1);
             m_parent->instance()->setMinecraftRunning(false);

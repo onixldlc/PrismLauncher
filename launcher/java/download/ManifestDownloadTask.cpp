@@ -39,9 +39,8 @@ void ManifestDownloadTask::executeTask()
 {
     setStatus(tr("Downloading Java"));
     auto download = makeShared<NetJob>(QString("JRE::DownloadJava"), APPLICATION->network());
-    auto files = std::make_shared<QByteArray>();
 
-    auto action = Net::Download::makeByteArray(m_url, files);
+    auto [action, files] = Net::Request::makeByteArray(m_url);
     if (!m_checksum_hash.isEmpty() && !m_checksum_type.isEmpty()) {
         auto hashType = QCryptographicHash::Algorithm::Sha1;
         if (m_checksum_type == "sha256") {
@@ -57,16 +56,15 @@ void ManifestDownloadTask::executeTask()
     connect(download.get(), &Task::status, this, &ManifestDownloadTask::setStatus);
     connect(download.get(), &Task::details, this, &ManifestDownloadTask::setDetails);
 
-    connect(download.get(), &Task::succeeded, [files, this] {
-        QJsonParseError parse_error{};
-        QJsonDocument doc = QJsonDocument::fromJson(*files, &parse_error);
-        if (parse_error.error != QJsonParseError::NoError) {
-            qWarning() << "Error while parsing JSON response at " << parse_error.offset << ". Reason: " << parse_error.errorString();
+    connect(download.get(), &Task::succeeded, this, [files, this] {
+        auto doc = Json::requireDocument(*files, "Java manifest");
+        if (!doc) {
+            qWarning() << "Error while parsing JSON response:" << doc.error();
             qWarning() << *files;
-            emitFailed(parse_error.errorString());
+            emitFailed(doc.error());
             return;
         }
-        downloadJava(doc);
+        downloadJava(doc.value());
     });
     m_task = download;
     m_task->start();
@@ -77,39 +75,39 @@ void ManifestDownloadTask::downloadJava(const QJsonDocument& doc)
     // valid json doc, begin making jre spot
     FS::ensureFolderPathExists(m_final_path);
     std::vector<File> toDownload;
-    auto list = Json::ensureObject(Json::ensureObject(doc.object()), "files");
+    auto list = doc.object()["files"].toObject();
     for (const auto& paths : list.keys()) {
         auto file = FS::PathCombine(m_final_path, paths);
 
-        const QJsonObject& meta = Json::ensureObject(list, paths);
-        auto type = Json::ensureString(meta, "type");
+        const QJsonObject& meta = list[paths].toObject();
+        auto type = meta["type"].toString();
         if (type == "directory") {
             FS::ensureFolderPathExists(file);
         } else if (type == "link") {
             // this is *nix only !
-            auto path = Json::ensureString(meta, "target");
+            auto path = meta["target"].toString();
             if (!path.isEmpty()) {
                 QFile::link(path, file);
             }
         } else if (type == "file") {
             // TODO download compressed version if it exists ?
-            auto raw = Json::ensureObject(Json::ensureObject(meta, "downloads"), "raw");
-            auto isExec = Json::ensureBoolean(meta, "executable", false);
-            auto url = Json::ensureString(raw, "url");
+            auto raw = meta["downloads"].toObject()["raw"].toObject();
+            auto isExec = meta["executable"].toBool();
+            auto url = raw["url"].toString();
             if (!url.isEmpty() && QUrl(url).isValid()) {
-                auto f = File{ file, url, QByteArray::fromHex(Json::ensureString(raw, "sha1").toLatin1()), isExec };
+                auto f = File{ file, url, QByteArray::fromHex(raw["sha1"].toString().toLatin1()), isExec };
                 toDownload.push_back(f);
             }
         }
     }
     auto elementDownload = makeShared<NetJob>("JRE::FileDownload", APPLICATION->network());
     for (const auto& file : toDownload) {
-        auto dl = Net::Download::makeFile(file.url, file.path);
+        auto dl = Net::Request::makeFile(file.url, file.path);
         if (!file.hash.isEmpty()) {
             dl->addValidator(new Net::ChecksumValidator(QCryptographicHash::Sha1, file.hash));
         }
         if (file.isExec) {
-            connect(dl.get(), &Net::Download::succeeded,
+            connect(dl.get(), &Net::Request::succeeded, dl.get(),
                     [file] { QFile(file.path).setPermissions(QFile(file.path).permissions() | QFileDevice::Permissions(0x1111)); });
         }
         elementDownload->addNetAction(dl);

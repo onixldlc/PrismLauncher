@@ -26,10 +26,10 @@
 class DataPackPage : public ExternalResourcesPage {
     Q_OBJECT
    public:
-    explicit DataPackPage(BaseInstance* instance, std::shared_ptr<DataPackFolderModel> model, QWidget* parent = nullptr);
+    explicit DataPackPage(MinecraftInstance* instance, DataPackFolderModel* model, QWidget* parent = nullptr);
 
-    QString displayName() const override { return QObject::tr("Data packs"); }
-    QIcon icon() const override { return APPLICATION->getThemedIcon("datapacks"); }
+    QString displayName() const override { return QObject::tr("Data Packs"); }
+    QIcon icon() const override { return QIcon::fromTheme("datapacks"); }
     QString id() const override { return "datapacks"; }
     QString helpPage() const override { return "Data-packs"; }
     bool shouldDisplay() const override { return true; }
@@ -43,8 +43,8 @@ class DataPackPage : public ExternalResourcesPage {
     void changeDataPackVersion();
 
    private:
-    std::shared_ptr<DataPackFolderModel> m_model;
-    QPointer<ResourceDownload::DataPackDownloadDialog> m_downloadDialog;
+    DataPackFolderModel* m_model;
+    QPointer<ResourceDownload::ResourceDownloadDialog> m_downloadDialog;
 };
 
 /**

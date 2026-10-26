@@ -38,7 +38,6 @@
 #include <QDialog>
 #include <memory>
 
-#include <Application.h>
 #include <translations/TranslationsModel.h>
 #include "java/JavaChecker.h"
 #include "ui/pages/BasePage.h"
@@ -58,7 +57,7 @@ class LauncherPage : public QWidget, public BasePage {
     ~LauncherPage();
 
     QString displayName() const override { return tr("General"); }
-    QIcon icon() const override { return APPLICATION->getThemedIcon("settings"); }
+    QIcon icon() const override { return QIcon::fromTheme("settings"); }
     QString id() const override { return "launcher-settings"; }
     QString helpPage() const override { return "Launcher-settings"; }
     bool apply() override;
@@ -67,9 +66,12 @@ class LauncherPage : public QWidget, public BasePage {
    private:
     void applySettings();
     void loadSettings();
+    bool confirmInstanceDirPath(const QString& rawDir, const QString& cookedDir);
 
    private slots:
     void on_instDirBrowseBtn_clicked();
+    void on_addInstDirBtn_clicked();
+    void on_removeInstDirBtn_clicked();
     void on_modsDirBrowseBtn_clicked();
     void on_iconsDirBrowseBtn_clicked();
     void on_downloadsDirBrowseBtn_clicked();

@@ -38,7 +38,6 @@
 #include <QWidget>
 
 #include <Application.h>
-#include <pathmatcher/IPathMatcher.h>
 #include <QFileSystemWatcher>
 #include "LogPage.h"
 #include "ui/pages/BasePage.h"
@@ -47,18 +46,16 @@ namespace Ui {
 class OtherLogsPage;
 }
 
-class RecursiveFileSystemWatcher;
-
 class OtherLogsPage : public QWidget, public BasePage {
     Q_OBJECT
 
    public:
-    explicit OtherLogsPage(QString id, QString displayName, QString helpPage, InstancePtr instance = nullptr, QWidget* parent = 0);
+    explicit OtherLogsPage(QString id, QString displayName, QString helpPage, BaseInstance* instance = nullptr, QWidget* parent = 0);
     ~OtherLogsPage();
 
     QString id() const override { return m_id; }
     QString displayName() const override { return m_displayName; }
-    QIcon icon() const override { return APPLICATION->getThemedIcon("log"); }
+    QIcon icon() const override { return QIcon::fromTheme("log"); }
     QString helpPage() const override { return m_helpPage; }
     void retranslate() override;
 
@@ -98,7 +95,7 @@ class OtherLogsPage : public QWidget, public BasePage {
     QString m_helpPage;
 
     Ui::OtherLogsPage* ui;
-    InstancePtr m_instance;
+    BaseInstance* m_instance;
     /** Path to display log paths relative to. */
     QString m_basePath;
     QStringList m_logSearchPaths;
@@ -106,5 +103,5 @@ class OtherLogsPage : public QWidget, public BasePage {
     QFileSystemWatcher m_watcher;
 
     LogFormatProxyModel* m_proxy;
-    shared_qobject_ptr<LogModel> m_model;
+    LogModel* m_model;
 };

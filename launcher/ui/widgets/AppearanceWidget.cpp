@@ -43,10 +43,15 @@
 #include "ui/themes/ITheme.h"
 #include "ui/themes/ThemeManager.h"
 
+#include <Application.h>
+#include "settings/SettingsObject.h"
+
 AppearanceWidget::AppearanceWidget(bool themesOnly, QWidget* parent)
     : QWidget(parent), m_ui(new Ui::AppearanceWidget), m_themesOnly(themesOnly)
 {
     m_ui->setupUi(this);
+
+    connect(m_ui->enableCatCheckBox, &QCheckBox::toggled, m_ui->catSettingsBox, &QWidget::setEnabled);
 
     m_ui->catPreview->setGraphicsEffect(new QGraphicsOpacityEffect(this));
 
@@ -92,10 +97,15 @@ AppearanceWidget::~AppearanceWidget()
 
 void AppearanceWidget::applySettings()
 {
-    SettingsObjectPtr settings = APPLICATION->settings();
+    SettingsObject* settings = APPLICATION->settings();
     QString consoleFontFamily = m_ui->consoleFont->currentFont().family();
     settings->set("ConsoleFont", consoleFontFamily);
     settings->set("ConsoleFontSize", m_ui->fontSizeBox->value());
+    const bool catEnabled = m_ui->enableCatCheckBox->isChecked();
+    settings->set("EnableCat", catEnabled);
+    if (!catEnabled) {
+        settings->set("TheCat", false);
+    }
     settings->set("CatOpacity", m_ui->catOpacitySlider->value());
     auto catFit = m_ui->catFitComboBox->currentIndex();
     settings->set("CatFit", catFit == 0 ? "fit" : catFit == 1 ? "fill" : "strech");
@@ -103,7 +113,7 @@ void AppearanceWidget::applySettings()
 
 void AppearanceWidget::loadSettings()
 {
-    SettingsObjectPtr settings = APPLICATION->settings();
+    SettingsObject* settings = APPLICATION->settings();
     QString fontFamily = settings->get("ConsoleFont").toString();
     QFont consoleFont(fontFamily);
     m_ui->consoleFont->setCurrentFont(consoleFont);
@@ -115,6 +125,7 @@ void AppearanceWidget::loadSettings()
     }
     m_ui->fontSizeBox->setValue(fontSize);
 
+    m_ui->enableCatCheckBox->setChecked(settings->get("EnableCat").toBool());
     m_ui->catOpacitySlider->setValue(settings->get("CatOpacity").toInt());
 
     auto catFit = settings->get("CatFit").toString();
@@ -175,7 +186,7 @@ void AppearanceWidget::loadThemeSettings()
     m_ui->widgetStyleComboBox->clear();
     m_ui->catPackComboBox->clear();
 
-    const SettingsObjectPtr settings = APPLICATION->settings();
+    SettingsObject* settings = APPLICATION->settings();
 
     const QString currentIconTheme = settings->get("IconTheme").toString();
     const auto iconThemes = APPLICATION->themeManager()->getValidIconThemes();
@@ -232,7 +243,7 @@ void AppearanceWidget::updateConsolePreview()
     m_ui->consolePreview->clear();
     m_defaultFormat.setFont(QFont(fontFamily, fontSize));
 
-    auto print = [this, colors](const QString& message, MessageLevel::Enum level) {
+    auto print = [this, colors](const QString& message, MessageLevel level) {
         QTextCharFormat format(m_defaultFormat);
 
         QColor bg = colors.background.value(level);

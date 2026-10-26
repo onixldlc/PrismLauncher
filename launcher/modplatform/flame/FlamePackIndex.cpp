@@ -1,150 +1,79 @@
+// SPDX-License-Identifier: GPL-3.0-only
+/*
+ *  Prism Launcher - Minecraft Launcher
+ *  Copyright (c) 2026 Trial97 <alexandru.tripon97@gmail.com>
+ *
+ *  This program is free software: you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation, version 3.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+
 #include "FlamePackIndex.h"
-#include <QFileInfo>
-#include <QUrl>
 
 #include "Json.h"
 #include "modplatform/ModIndex.h"
+#include "modplatform/flame/FlameAPI.h"
 
-void Flame::loadIndexedPack(Flame::IndexedPack& pack, QJsonObject& obj)
+namespace Flame::Parse {
+Result<> loadIndexedPack(ModPlatform::IndexedPack& pack, const QJsonObject& obj)
 {
-    pack.addonId = Json::requireInteger(obj, "id");
-    pack.name = Json::requireString(obj, "name");
-    pack.description = Json::ensureString(obj, "summary", "");
+    TRY_INTO(pack.addonId, Json::requireInteger(obj, "id"))
+    pack.provider = ModPlatform::ResourceProvider::FLAME;
+    TRY_INTO(pack.name, Json::requireString(obj, "name"))
+    TRY_INTO(pack.slug, Json::requireString(obj, "slug"))
+    pack.websiteUrl = obj["links"].toObject()["websiteUrl"].toString("");
+    pack.description = obj["summary"].toString("");
 
-    auto logo = Json::requireObject(obj, "logo");
-    pack.logoUrl = Json::requireString(logo, "thumbnailUrl");
-    pack.logoName = Json::requireString(obj, "slug") + "." + QFileInfo(QUrl(pack.logoUrl).fileName()).suffix();
-
-    auto authors = Json::requireArray(obj, "authors");
-    for (auto authorIter : authors) {
-        auto author = Json::requireObject(authorIter);
-        Flame::ModpackAuthor packAuthor;
-        packAuthor.name = Json::requireString(author, "name");
-        packAuthor.url = Json::requireString(author, "url");
-        pack.authors.append(packAuthor);
-    }
-    int defaultFileId = Json::requireInteger(obj, "mainFileId");
-
-    bool found = false;
-    // check if there are some files before adding the pack
-    auto files = Json::requireArray(obj, "latestFiles");
-    for (auto fileIter : files) {
-        auto file = Json::requireObject(fileIter);
-        int id = Json::requireInteger(file, "id");
-
-        // NOTE: for now, ignore everything that's not the default...
-        if (id != defaultFileId) {
-            continue;
-        }
-
-        auto versionArray = Json::requireArray(file, "gameVersions");
-        if (versionArray.size() < 1) {
-            continue;
-        }
-
-        found = true;
-        break;
-    }
-    if (!found) {
-        throw JSONValidationError(QString("Pack with no good file, skipping: %1").arg(pack.name));
+    QJsonObject logo = obj["logo"].toObject();
+    pack.logoName = logo["title"].toString();
+    pack.logoUrl = logo["thumbnailUrl"].toString();
+    if (pack.logoUrl.isEmpty()) {
+        pack.logoUrl = logo["url"].toString();
     }
 
-    loadIndexedInfo(pack, obj);
-}
-
-void Flame::loadIndexedInfo(IndexedPack& pack, QJsonObject& obj)
-{
-    auto links_obj = Json::ensureObject(obj, "links");
-
-    pack.extra.websiteUrl = Json::ensureString(links_obj, "websiteUrl");
-    if (pack.extra.websiteUrl.endsWith('/'))
-        pack.extra.websiteUrl.chop(1);
-
-    pack.extra.issuesUrl = Json::ensureString(links_obj, "issuesUrl");
-    if (pack.extra.issuesUrl.endsWith('/'))
-        pack.extra.issuesUrl.chop(1);
-
-    pack.extra.sourceUrl = Json::ensureString(links_obj, "sourceUrl");
-    if (pack.extra.sourceUrl.endsWith('/'))
-        pack.extra.sourceUrl.chop(1);
-
-    pack.extra.wikiUrl = Json::ensureString(links_obj, "wikiUrl");
-    if (pack.extra.wikiUrl.endsWith('/'))
-        pack.extra.wikiUrl.chop(1);
-
-    pack.extraInfoLoaded = true;
-}
-
-void Flame::loadIndexedPackVersions(Flame::IndexedPack& pack, QJsonArray& arr)
-{
-    QList<Flame::IndexedVersion> unsortedVersions;
-    for (auto versionIter : arr) {
-        auto version = Json::requireObject(versionIter);
-        Flame::IndexedVersion file;
-
-        file.addonId = pack.addonId;
-        file.fileId = Json::requireInteger(version, "id");
-        auto versionArray = Json::requireArray(version, "gameVersions");
-        if (versionArray.size() < 1) {
-            continue;
-        }
-
-        for (auto mcVer : versionArray) {
-            auto str = mcVer.toString();
-
-            if (str.contains('.'))
-                file.mcVersion.append(str);
-
-            if (auto loader = str.toLower(); loader == "neoforge")
-                file.loaders |= ModPlatform::NeoForge;
-            else if (loader == "forge")
-                file.loaders |= ModPlatform::Forge;
-            else if (loader == "cauldron")
-                file.loaders |= ModPlatform::Cauldron;
-            else if (loader == "liteloader")
-                file.loaders |= ModPlatform::LiteLoader;
-            else if (loader == "fabric")
-                file.loaders |= ModPlatform::Fabric;
-            else if (loader == "quilt")
-                file.loaders |= ModPlatform::Quilt;
-        }
-
-        // pick the latest version supported
-        file.version = Json::requireString(version, "displayName");
-
-        ModPlatform::IndexedVersionType::VersionType ver_type;
-        switch (Json::requireInteger(version, "releaseType")) {
-            case 1:
-                ver_type = ModPlatform::IndexedVersionType::VersionType::Release;
-                break;
-            case 2:
-                ver_type = ModPlatform::IndexedVersionType::VersionType::Beta;
-                break;
-            case 3:
-                ver_type = ModPlatform::IndexedVersionType::VersionType::Alpha;
-                break;
-            default:
-                ver_type = ModPlatform::IndexedVersionType::VersionType::Unknown;
-        }
-        file.version_type = ModPlatform::IndexedVersionType(ver_type);
-        file.downloadUrl = Json::ensureString(version, "downloadUrl");
-
-        // only add if we have a download URL (third party distribution is enabled)
-        if (!file.downloadUrl.isEmpty()) {
-            unsortedVersions.append(file);
+    auto authors = obj["authors"].toArray();
+    if (!authors.isEmpty()) {
+        pack.authors.clear();
+        for (auto authorIter : authors) {
+            TRY_INTO(const auto& author, Json::requireObject(authorIter))
+            ModPlatform::ModpackAuthor packAuthor;
+            TRY_INTO(packAuthor.name, Json::requireString(author, "name"))
+            TRY_INTO(packAuthor.url, Json::requireString(author, "url"))
+            pack.authors.append(packAuthor);
         }
     }
 
-    auto orderSortPredicate = [](const IndexedVersion& a, const IndexedVersion& b) -> bool { return a.fileId > b.fileId; };
-    std::sort(unsortedVersions.begin(), unsortedVersions.end(), orderSortPredicate);
-    pack.versions = unsortedVersions;
-    pack.versionsLoaded = true;
-}
+    pack.resourceType = FlameAPI::getResourceType(obj["classId"].toInt(0));
+    pack.extraDataLoaded = false;
 
-auto Flame::getVersionDisplayString(const IndexedVersion& version) -> QString
-{
-    auto release_type = version.version_type.isValid() ? QString(" [%1]").arg(version.version_type.toString()) : "";
-    auto mcVersion =
-        !version.mcVersion.isEmpty() && !version.version.contains(version.mcVersion) ? QObject::tr(" for %1").arg(version.mcVersion) : "";
-    return QString("%1%2%3").arg(version.version, mcVersion, release_type);
+    auto linksObj = obj["links"].toObject();
+
+    pack.extraData.issuesUrl = linksObj["issuesUrl"].toString();
+    if (pack.extraData.issuesUrl.endsWith('/')) {
+        pack.extraData.issuesUrl.chop(1);
+    }
+
+    pack.extraData.sourceUrl = linksObj["sourceUrl"].toString();
+    if (pack.extraData.sourceUrl.endsWith('/')) {
+        pack.extraData.sourceUrl.chop(1);
+    }
+
+    pack.extraData.wikiUrl = linksObj["wikiUrl"].toString();
+    if (pack.extraData.wikiUrl.endsWith('/')) {
+        pack.extraData.wikiUrl.chop(1);
+    }
+
+    if (!pack.extraData.body.isEmpty()) {
+        pack.extraDataLoaded = true;
+    }
+    return {};
 }
+}  // namespace Flame::Parse

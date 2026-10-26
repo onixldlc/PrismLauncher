@@ -52,20 +52,28 @@
 #include "Application.h"
 #include "modplatform/technic/SolderPackManifest.h"
 
-#include "net/ApiDownload.h"
+#include "net/ApiRequest.h"
 
 TechnicPage::TechnicPage(NewInstanceDialog* dialog, QWidget* parent)
-    : QWidget(parent), ui(new Ui::TechnicPage), dialog(dialog), m_fetch_progress(this, false)
+    : QWidget(parent), ui(new Ui::TechnicPage), dialog(dialog), model(new Technic::ListModel(this)), m_fetch_progress(this, false)
 {
     ui->setupUi(this);
-    ui->searchEdit->installEventFilter(this);
-    model = new Technic::ListModel(this);
+
     ui->packView->setModel(model);
+    ui->versionSelectionBox->view()->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    ui->versionSelectionBox->view()->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
 
     m_search_timer.setTimerType(Qt::TimerType::CoarseTimer);
     m_search_timer.setSingleShot(true);
 
     connect(&m_search_timer, &QTimer::timeout, this, &TechnicPage::triggerSearch);
+
+    connect(ui->searchEdit, &QLineEdit::textEdited, this, [this] {
+        if (m_search_timer.isActive()) {
+            m_search_timer.stop();
+        }
+        m_search_timer.start(350);
+    });
 
     m_fetch_progress.hideIfInactive(true);
     m_fetch_progress.setFixedHeight(24);
@@ -77,24 +85,6 @@ TechnicPage::TechnicPage(NewInstanceDialog* dialog, QWidget* parent)
     connect(ui->versionSelectionBox, &QComboBox::currentTextChanged, this, &TechnicPage::onVersionSelectionChanged);
 
     ui->packView->setItemDelegate(new ProjectItemDelegate(this));
-}
-
-bool TechnicPage::eventFilter(QObject* watched, QEvent* event)
-{
-    if (watched == ui->searchEdit && event->type() == QEvent::KeyPress) {
-        QKeyEvent* keyEvent = static_cast<QKeyEvent*>(event);
-        if (keyEvent->key() == Qt::Key_Return) {
-            triggerSearch();
-            keyEvent->accept();
-            return true;
-        } else {
-            if (m_search_timer.isActive())
-                m_search_timer.stop();
-
-            m_search_timer.start(350);
-        }
-    }
-    return QWidget::eventFilter(watched, event);
 }
 
 TechnicPage::~TechnicPage()
@@ -153,7 +143,7 @@ void TechnicPage::suggestCurrent()
 
     QString editedLogoName = "technic_" + current.logoName;
     model->getLogo(current.logoName, current.logoUrl,
-                   [this, editedLogoName](QString logo) { dialog->setSuggestedIconFromFile(logo, editedLogoName); });
+                   [this, editedLogoName](const QString& logo) { dialog->setSuggestedIconFromFile(logo, editedLogoName); });
 
     if (current.metadataLoaded) {
         metadataLoaded();
@@ -162,24 +152,25 @@ void TechnicPage::suggestCurrent()
 
     auto netJob = makeShared<NetJob>(QString("Technic::PackMeta(%1)").arg(current.name), APPLICATION->network());
     QString slug = current.slug;
-    netJob->addNetAction(Net::ApiDownload::makeByteArray(
-        QString("%1modpack/%2?build=%3").arg(BuildConfig.TECHNIC_API_BASE_URL, slug, BuildConfig.TECHNIC_API_BUILD), response));
-    connect(netJob.get(), &NetJob::succeeded, this, [this, slug] {
+    auto [action, responsePtr] = Net::ApiRequest::makeByteArray(
+        QString("%1modpack/%2?build=%3").arg(BuildConfig.TECHNIC_API_BASE_URL, slug, BuildConfig.TECHNIC_API_BUILD));
+    netJob->addNetAction(action);
+    connect(netJob.get(), &NetJob::succeeded, this, [this, responsePtr, slug] {
+        // NOTE(TheKodeToad): moving the response out to avoid it from being destroyed by jobPtr.reset()
+        QByteArray response = std::move(*responsePtr);
         jobPtr.reset();
 
         if (current.slug != slug) {
             return;
         }
 
-        QJsonParseError parse_error{};
-        QJsonDocument doc = QJsonDocument::fromJson(*response, &parse_error);
-        QJsonObject obj = doc.object();
-        if (parse_error.error != QJsonParseError::NoError) {
-            qWarning() << "Error while parsing JSON response from Technic at " << parse_error.offset
-                       << " reason: " << parse_error.errorString();
-            qWarning() << *response;
+        auto doc = Json::requireDocument(response);
+        if (!doc) {
+            qWarning() << "Error while parsing JSON response from Technic" << doc.error();
+            qWarning() << response;
             return;
         }
+        auto obj = doc->object();
         if (!obj.contains("url")) {
             qWarning() << "Json doesn't contain an url key";
             return;
@@ -202,17 +193,17 @@ void TechnicPage::suggestCurrent()
             }
         }
 
-        current.minecraftVersion = Json::ensureString(obj, "minecraft", QString(), "__placeholder__");
-        current.websiteUrl = Json::ensureString(obj, "platformUrl", QString(), "__placeholder__");
-        current.author = Json::ensureString(obj, "user", QString(), "__placeholder__");
-        current.description = Json::ensureString(obj, "description", QString(), "__placeholder__");
-        current.currentVersion = Json::ensureString(obj, "version", QString(), "__placeholder__");
+        current.minecraftVersion = obj["minecraft"].toString();
+        current.websiteUrl = obj["platformUrl"].toString();
+        current.author = obj["user"].toString();
+        current.description = obj["description"].toString();
+        current.currentVersion = obj["version"].toString();
         current.metadataLoaded = true;
 
         metadataLoaded();
     });
-    connect(jobPtr.get(), &NetJob::failed,
-            [this](QString reason) { CustomMessageBox::selectable(this, tr("Error"), reason, QMessageBox::Critical)->exec(); });
+    connect(jobPtr.get(), &NetJob::failed, this,
+            [this](const QString& reason) { CustomMessageBox::selectable(this, tr("Error"), reason, QMessageBox::Critical)->exec(); });
 
     jobPtr = netJob;
     jobPtr->start();
@@ -224,10 +215,11 @@ void TechnicPage::metadataLoaded()
     QString text = "";
     QString name = current.name;
 
-    if (current.websiteUrl.isEmpty())
+    if (current.websiteUrl.isEmpty()) {
         text = name.toHtmlEscaped();
-    else
+    } else {
         text = "<a href=\"" + current.websiteUrl.toHtmlEscaped() + "\">" + name.toHtmlEscaped() + "</a>";
+    }
 
     if (!current.author.isEmpty()) {
         text += "<br>" + tr(" by ") + current.author.toHtmlEscaped();
@@ -239,8 +231,9 @@ void TechnicPage::metadataLoaded()
 
     // Strip trailing forward-slashes from Solder URL's
     if (current.isSolder) {
-        while (current.url.endsWith('/'))
+        while (current.url.endsWith('/')) {
             current.url.chop(1);
+        }
     }
 
     // Display versions from Solder
@@ -249,7 +242,7 @@ void TechnicPage::metadataLoaded()
         ui->versionSelectionBox->addItem(current.currentVersion);
     } else if (current.versionsLoaded) {
         // reverse foreach, so that the newest versions are first
-        for (auto i = current.versions.size(); i--;) {
+        for (auto i = current.versions.size(); (i--) != 0;) {
             ui->versionSelectionBox->addItem(current.versions.at(i));
         }
         ui->versionSelectionBox->setCurrentText(current.recommended);
@@ -260,11 +253,12 @@ void TechnicPage::metadataLoaded()
 
         auto netJob = makeShared<NetJob>(QString("Technic::SolderMeta(%1)").arg(current.name), APPLICATION->network());
         auto url = QString("%1/modpack/%2").arg(current.url, current.slug);
-        netJob->addNetAction(Net::ApiDownload::makeByteArray(QUrl(url), response));
+        auto [action, response] = Net::ApiRequest::makeByteArray(QUrl(url));
+        netJob->addNetAction(action);
 
-        connect(netJob.get(), &NetJob::succeeded, this, &TechnicPage::onSolderLoaded);
-        connect(jobPtr.get(), &NetJob::failed,
-                [this](QString reason) { CustomMessageBox::selectable(this, tr("Error"), reason, QMessageBox::Critical)->exec(); });
+        connect(netJob.get(), &NetJob::succeeded, this, [this, response] { onSolderLoaded(response); });
+        connect(jobPtr.get(), &NetJob::failed, this,
+                [this](const QString& reason) { CustomMessageBox::selectable(this, tr("Error"), reason, QMessageBox::Critical)->exec(); });
 
         jobPtr = netJob;
         jobPtr->start();
@@ -293,8 +287,10 @@ void TechnicPage::selectVersion()
     }
 }
 
-void TechnicPage::onSolderLoaded()
+void TechnicPage::onSolderLoaded(QByteArray* responsePtr)
 {
+    // NOTE(TheKodeToad): moving the response out to avoid it from being destroyed by jobPtr.reset()
+    QByteArray response = std::move(*responsePtr);
     jobPtr.reset();
 
     auto fallback = [this]() {
@@ -306,21 +302,14 @@ void TechnicPage::onSolderLoaded()
 
     current.versions.clear();
 
-    QJsonParseError parse_error{};
-    auto doc = QJsonDocument::fromJson(*response, &parse_error);
-    if (parse_error.error != QJsonParseError::NoError) {
-        qWarning() << "Error while parsing JSON response from Solder at " << parse_error.offset << " reason: " << parse_error.errorString();
-        qWarning() << *response;
-        fallback();
-        return;
-    }
-    auto obj = doc.object();
-
     TechnicSolder::Pack pack;
-    try {
-        TechnicSolder::loadPack(pack, obj);
-    } catch (const JSONValidationError& err) {
-        qCritical() << "Couldn't parse Solder pack metadata:" << err.cause();
+    auto doc = Json::requireDocument(response).and_then([&pack](const auto& v) {
+        auto obj = v.object();
+        return TechnicSolder::loadPack(pack, obj);
+    });
+    if (!doc) {
+        qWarning() << "Error while parsing JSON response from Solder:" << doc.error();
+        qWarning() << response;
         fallback();
         return;
     }
@@ -334,7 +323,7 @@ void TechnicPage::onSolderLoaded()
     metadataLoaded();
 }
 
-void TechnicPage::onVersionSelectionChanged(QString version)
+void TechnicPage::onVersionSelectionChanged(const QString& version)
 {
     if (version.isNull() || version.isEmpty()) {
         selectedVersion = "";

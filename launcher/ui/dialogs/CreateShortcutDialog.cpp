@@ -38,7 +38,6 @@
 #include <QLayout>
 #include <QPushButton>
 
-#include "Application.h"
 #include "BuildConfig.h"
 #include "CreateShortcutDialog.h"
 #include "ui_CreateShortcutDialog.h"
@@ -56,7 +55,7 @@
 #include "minecraft/WorldList.h"
 #include "minecraft/auth/AccountList.h"
 
-CreateShortcutDialog::CreateShortcutDialog(InstancePtr instance, QWidget* parent)
+CreateShortcutDialog::CreateShortcutDialog(MinecraftInstance* instance, QWidget* parent)
     : QDialog(parent), ui(new Ui::CreateShortcutDialog), m_instance(instance)
 {
     ui->setupUi(this);
@@ -65,9 +64,8 @@ CreateShortcutDialog::CreateShortcutDialog(InstancePtr instance, QWidget* parent
     ui->iconButton->setIcon(APPLICATION->icons()->getIcon(InstIconKey));
     ui->instNameTextBox->setPlaceholderText(instance->name());
 
-    auto mInst = std::dynamic_pointer_cast<MinecraftInstance>(instance);
-    m_QuickJoinSupported = mInst && mInst->traits().contains("feature:is_quick_play_singleplayer");
-    auto worldList = mInst->worldList();
+    m_QuickJoinSupported = instance && instance->traits().contains("feature:is_quick_play_singleplayer");
+    auto worldList = instance->worldList();
     worldList->update();
     if (!m_QuickJoinSupported || worldList->empty()) {
         ui->worldTarget->hide();
@@ -112,7 +110,7 @@ CreateShortcutDialog::CreateShortcutDialog(InstancePtr instance, QWidget* parent
             if (account->isInUse())
                 profileLabel = tr("%1 (in use)").arg(profileLabel);
             auto face = account->getFace();
-            QIcon icon = face.isNull() ? APPLICATION->getThemedIcon("noaccount") : face;
+            QIcon icon = face.isNull() ? QIcon::fromTheme("noaccount") : face;
             ui->accountSelectionBox->addItem(profileLabel, account->profileName());
             ui->accountSelectionBox->setItemIcon(i, icon);
             if (defaultAccount == account)
@@ -213,7 +211,7 @@ void CreateShortcutDialog::createShortcut()
     if (ui->overrideAccountCheckbox->isChecked())
         extraArgs.append({ "--profile", ui->accountSelectionBox->currentData().toString() });
 
-    ShortcutUtils::Shortcut args{ m_instance.get(), name, targetString, this, extraArgs, InstIconKey, target };
+    ShortcutUtils::Shortcut args{ m_instance, name, targetString, this, extraArgs, InstIconKey, target };
     if (target == ShortcutTarget::Desktop)
         ShortcutUtils::createInstanceShortcutOnDesktop(args);
     else if (target == ShortcutTarget::Applications)

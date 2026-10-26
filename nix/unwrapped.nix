@@ -3,24 +3,20 @@
   stdenv,
   cmake,
   cmark,
-  apple-sdk_11,
-  extra-cmake-modules,
   gamemode,
   jdk17,
   kdePackages,
   libnbtplusplus,
-  qrcodegenerator,
   ninja,
+  pkg-config,
+  qrencode,
   self,
   stripJavaArchivesHook,
   tomlplusplus,
   zlib,
   msaClientID ? null,
-  gamemodeSupport ? stdenv.hostPlatform.isLinux,
+  libarchive,
 }:
-assert lib.assertMsg (
-  gamemodeSupport -> stdenv.hostPlatform.isLinux
-) "gamemodeSupport is only available on Linux.";
 
 let
   date =
@@ -43,7 +39,7 @@ in
 
 stdenv.mkDerivation {
   pname = "prismlauncher-unwrapped";
-  version = "10.0-unstable-${date}";
+  version = "12.0-unstable-${date}";
 
   src = lib.fileset.toSource {
     root = ../.;
@@ -63,15 +59,19 @@ stdenv.mkDerivation {
   postUnpack = ''
     rm -rf source/libraries/libnbtplusplus
     ln -s ${libnbtplusplus} source/libraries/libnbtplusplus
+  '';
 
-    rm -rf source/libraries/qrcodegenerator
-    ln -s ${qrcodegenerator} source/libraries/qrcodegenerator
+  # Ensure that instance shortcuts point to our final wrapper, rather than this unwrapped version
+  postPatch = ''
+    substituteInPlace launcher/minecraft/ShortcutUtils.cpp \
+      --replace-fail 'QApplication::applicationFilePath()' 'QProcessEnvironment::systemEnvironment().value("NIX_LAUNCHER_WRAPPER", "${placeholder "out"}/bin/prismlauncher")'
   '';
 
   nativeBuildInputs = [
     cmake
     ninja
-    extra-cmake-modules
+    kdePackages.extra-cmake-modules
+    pkg-config
     jdk17
     stripJavaArchivesHook
   ];
@@ -80,14 +80,12 @@ stdenv.mkDerivation {
     cmark
     kdePackages.qtbase
     kdePackages.qtnetworkauth
-    kdePackages.quazip
+    qrencode
+    libarchive
     tomlplusplus
     zlib
   ]
-  ++ lib.optionals stdenv.hostPlatform.isDarwin [ apple-sdk_11 ]
-  ++ lib.optional gamemodeSupport gamemode;
-
-  hardeningEnable = lib.optionals stdenv.hostPlatform.isLinux [ "pie" ];
+  ++ lib.optional stdenv.hostPlatform.isLinux gamemode;
 
   cmakeFlags = [
     # downstream branding

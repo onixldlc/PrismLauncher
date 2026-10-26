@@ -33,7 +33,7 @@
 #include "MMCZip.h"
 #include "modplatform/modrinth/ModrinthPackExportTask.h"
 
-ExportPackDialog::ExportPackDialog(MinecraftInstancePtr instance, QWidget* parent, ModPlatform::ResourceProvider provider)
+ExportPackDialog::ExportPackDialog(MinecraftInstance* instance, QWidget* parent, ModPlatform::ResourceProvider provider)
     : QDialog(parent), m_instance(instance), m_ui(new Ui::ExportPackDialog), m_provider(provider)
 {
     Q_ASSERT(m_provider == ModPlatform::ResourceProvider::MODRINTH || m_provider == ModPlatform::ResourceProvider::FLAME);
@@ -95,17 +95,26 @@ ExportPackDialog::ExportPackDialog(MinecraftInstancePtr instance, QWidget* paren
         m_proxy->ignoreFilesWithPath().insert(FS::PathCombine(prefix, path));
     }
     m_proxy->ignoreFilesWithName().append({ ".DS_Store", "thumbs.db", "Thumbs.db" });
+    m_proxy->ignoreFilesWithSuffix().append(".pw.toml");
     m_proxy->setSourceModel(model);
     m_proxy->loadBlockedPathsFromFile(ignoreFileName());
 
     const QDir::Filters filter(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::AllDirs | QDir::Hidden);
 
-    MinecraftInstance* mcInstance = dynamic_cast<MinecraftInstance*>(instance.get());
-    if (mcInstance) {
-        for (auto resourceModel : mcInstance->resourceLists()) {
-            if (resourceModel && resourceModel->indexDir().exists())
-                m_proxy->ignoreFilesWithPath().insert(instanceRoot.relativeFilePath(resourceModel->indexDir().absolutePath()));
+    for (auto resourceModel : instance->resourceLists()) {
+        if (resourceModel == nullptr) {
+            continue;
         }
+
+        if (!resourceModel->indexDir().exists()) {
+            continue;
+        }
+
+        if (resourceModel->dir() == resourceModel->indexDir()) {
+            continue;
+        }
+
+        m_proxy->ignoreFilesWithPath().insert(instanceRoot.relativeFilePath(resourceModel->indexDir().absolutePath()));
     }
 
     m_ui->files->setModel(m_proxy);
@@ -187,16 +196,12 @@ void ExportPackDialog::done(int result)
             task = new FlamePackExportTask(std::move(options));
         }
 
-        connect(task, &Task::failed,
+        connect(task, &Task::failed, this,
                 [this](const QString reason) { CustomMessageBox::selectable(this, tr("Error"), reason, QMessageBox::Critical)->show(); });
-        connect(task, &Task::aborted, [this] {
-            CustomMessageBox::selectable(this, tr("Task aborted"), tr("The task has been aborted by the user."), QMessageBox::Information)
-                ->show();
-        });
-        connect(task, &Task::finished, [task] { task->deleteLater(); });
+        connect(task, &Task::finished, task, &Task::deleteLater);
 
         ProgressDialog progress(this);
-        progress.setSkipButton(true, tr("Abort"));
+        progress.showSkipButton();
         if (progress.execWithTask(task) != QDialog::Accepted)
             return;
     }

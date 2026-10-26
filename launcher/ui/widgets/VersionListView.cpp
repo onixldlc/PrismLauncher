@@ -44,6 +44,7 @@
 VersionListView::VersionListView(QWidget* parent) : QTreeView(parent)
 {
     m_emptyString = tr("No versions are currently available.");
+    setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
 }
 
 void VersionListView::rowsInserted(const QModelIndex& parent, int start, int end)
@@ -57,7 +58,7 @@ void VersionListView::rowsAboutToBeRemoved(const QModelIndex& parent, int start,
 {
     m_itemCount -= end - start + 1;
     updateEmptyViewPort();
-    QTreeView::rowsInserted(parent, start, end);
+    QTreeView::rowsAboutToBeRemoved(parent, start, end);
 }
 
 void VersionListView::setModel(QAbstractItemModel* model)

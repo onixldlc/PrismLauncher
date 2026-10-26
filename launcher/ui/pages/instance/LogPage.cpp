@@ -60,7 +60,7 @@ QVariant LogFormatProxyModel::data(const QModelIndex& index, int role) const
         case Qt::FontRole:
             return m_font;
         case Qt::ForegroundRole: {
-            auto level = static_cast<MessageLevel::Enum>(QIdentityProxyModel::data(index, LogModel::LevelRole).toInt());
+            MessageLevel level = static_cast<MessageLevel::Enum>(QIdentityProxyModel::data(index, LogModel::LevelRole).toInt());
             QColor result = colors.foreground.value(level);
 
             if (result.isValid())
@@ -69,7 +69,7 @@ QVariant LogFormatProxyModel::data(const QModelIndex& index, int role) const
             break;
         }
         case Qt::BackgroundRole: {
-            auto level = static_cast<MessageLevel::Enum>(QIdentityProxyModel::data(index, LogModel::LevelRole).toInt());
+            MessageLevel level = static_cast<MessageLevel::Enum>(QIdentityProxyModel::data(index, LogModel::LevelRole).toInt());
             QColor result = colors.background.value(level);
 
             if (result.isValid())
@@ -128,10 +128,9 @@ QModelIndex LogFormatProxyModel::find(const QModelIndex& start, const QString& v
     return QModelIndex();
 }
 
-LogPage::LogPage(InstancePtr instance, QWidget* parent) : QWidget(parent), ui(new Ui::LogPage), m_instance(instance)
+LogPage::LogPage(BaseInstance* instance, QWidget* parent) : QWidget(parent), ui(new Ui::LogPage), m_instance(instance)
 {
     ui->setupUi(this);
-    ui->tabWidget->tabBar()->hide();
 
     m_proxy = new LogFormatProxyModel(this);
 
@@ -154,7 +153,7 @@ LogPage::LogPage(InstancePtr instance, QWidget* parent) : QWidget(parent), ui(ne
         if (launchTask) {
             setInstanceLaunchTaskChanged(launchTask, true);
         }
-        connect(m_instance.get(), &BaseInstance::launchTaskChanged, this, &LogPage::onInstanceLaunchTaskChanged);
+        connect(m_instance, &BaseInstance::launchTaskChanged, this, &LogPage::onInstanceLaunchTaskChanged);
     }
 
     auto findShortcut = new QShortcut(QKeySequence(QKeySequence::Find), this);
@@ -204,7 +203,7 @@ void LogPage::UIToModelState()
     m_model->suspend(ui->trackLogCheckbox->checkState() != Qt::Checked);
 }
 
-void LogPage::setInstanceLaunchTaskChanged(shared_qobject_ptr<LaunchTask> proc, bool initial)
+void LogPage::setInstanceLaunchTaskChanged(LaunchTask* proc, bool initial)
 {
     m_process = proc;
     if (m_process) {
@@ -221,7 +220,7 @@ void LogPage::setInstanceLaunchTaskChanged(shared_qobject_ptr<LaunchTask> proc, 
     }
 }
 
-void LogPage::onInstanceLaunchTaskChanged(shared_qobject_ptr<LaunchTask> proc)
+void LogPage::onInstanceLaunchTaskChanged(LaunchTask* proc)
 {
     setInstanceLaunchTaskChanged(proc, false);
 }
@@ -238,19 +237,20 @@ bool LogPage::shouldDisplay() const
 
 void LogPage::on_btnPaste_clicked()
 {
-    if (!m_model)
+    if (!m_model) {
         return;
+    }
 
     // FIXME: turn this into a proper task and move the upload logic out of GuiUtil!
     m_model->append(MessageLevel::Launcher,
                     QString("Log upload triggered at: %1").arg(QDateTime::currentDateTime().toString(Qt::RFC2822Date)));
     auto url = GuiUtil::uploadPaste(tr("Minecraft Log"), m_model->toPlainText(), this);
-    if (!url.has_value()) {
+    if (!url) {
+        m_model->append(MessageLevel::Error, QString("Log upload failed: %1").arg(url.error()));
+    } else if (!url->has_value()) {
         m_model->append(MessageLevel::Error, QString("Log upload canceled"));
-    } else if (url->isNull()) {
-        m_model->append(MessageLevel::Error, QString("Log upload failed!"));
     } else {
-        m_model->append(MessageLevel::Launcher, QString("Log uploaded to: %1").arg(url.value()));
+        m_model->append(MessageLevel::Launcher, QString("Log uploaded to: %1").arg(url->value()));
     }
 }
 

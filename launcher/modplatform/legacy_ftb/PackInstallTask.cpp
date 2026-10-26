@@ -36,9 +36,11 @@
 #include "PackInstallTask.h"
 
 #include <QtConcurrent>
+#include <utility>
 
 #include "BaseInstance.h"
 #include "FileSystem.h"
+#include "Json.h"
 #include "MMCZip.h"
 #include "minecraft/GradleSpecifier.h"
 #include "minecraft/MinecraftInstance.h"
@@ -48,16 +50,13 @@
 #include "Application.h"
 #include "BuildConfig.h"
 
-#include "net/ApiDownload.h"
+#include "net/ApiRequest.h"
 
 namespace LegacyFTB {
 
-PackInstallTask::PackInstallTask(shared_qobject_ptr<QNetworkAccessManager> network, const Modpack& pack, QString version)
-{
-    m_pack = pack;
-    m_version = version;
-    m_network = network;
-}
+PackInstallTask::PackInstallTask(QNetworkAccessManager* network, Modpack pack, QString version)
+    : m_network(network), m_pack(std::move(pack)), m_version(std::move(version))
+{}
 
 void PackInstallTask::executeTask()
 {
@@ -73,22 +72,22 @@ void PackInstallTask::downloadPack()
     auto path = QString("%1/%2/%3").arg(m_pack.dir, m_version.replace(".", "_"), m_pack.file);
     auto entry = APPLICATION->metacache()->resolveEntry("FTBPacks", path);
     entry->setStale(true);
-    archivePath = entry->getFullPath();
-    netJobContainer.reset(new NetJob("Download FTB Pack", m_network));
+    m_archivePath = entry->getFullPath();
+    m_netJobContainer.reset(new NetJob("Download FTB Pack", m_network));
     QString url;
     if (m_pack.type == PackType::Private) {
         url = QString(BuildConfig.LEGACY_FTB_CDN_BASE_URL + "privatepacks/%1").arg(path);
     } else {
         url = QString(BuildConfig.LEGACY_FTB_CDN_BASE_URL + "modpacks/%1").arg(path);
     }
-    netJobContainer->addNetAction(Net::ApiDownload::makeCached(url, entry));
+    m_netJobContainer->addNetAction(Net::ApiRequest::makeCached(url, entry));
 
-    connect(netJobContainer.get(), &NetJob::succeeded, this, &PackInstallTask::unzip);
-    connect(netJobContainer.get(), &NetJob::failed, this, &PackInstallTask::emitFailed);
-    connect(netJobContainer.get(), &NetJob::stepProgress, this, &PackInstallTask::propagateStepProgress);
-    connect(netJobContainer.get(), &NetJob::aborted, this, &PackInstallTask::emitAborted);
+    connect(m_netJobContainer.get(), &NetJob::succeeded, this, &PackInstallTask::unzip);
+    connect(m_netJobContainer.get(), &NetJob::failed, this, &PackInstallTask::emitFailed);
+    connect(m_netJobContainer.get(), &NetJob::stepProgress, this, &PackInstallTask::propagateStepProgress);
+    connect(m_netJobContainer.get(), &NetJob::aborted, this, &PackInstallTask::emitAborted);
 
-    netJobContainer->start();
+    m_netJobContainer->start();
 
     setAbortable(true);
     progress(1, 4);
@@ -102,13 +101,7 @@ void PackInstallTask::unzip()
 
     QDir extractDir(m_stagingPath);
 
-    m_packZip.reset(new QuaZip(archivePath));
-    if (!m_packZip->open(QuaZip::mdUnzip)) {
-        emitFailed(tr("Failed to open modpack file %1!").arg(archivePath));
-        return;
-    }
-
-    m_extractFuture = QtConcurrent::run(QThreadPool::globalInstance(), QOverload<QString, QString>::of(MMCZip::extractDir), archivePath,
+    m_extractFuture = QtConcurrent::run(QThreadPool::globalInstance(), QOverload<QString, QString>::of(MMCZip::extractDir), m_archivePath,
                                         extractDir.absolutePath() + "/unzip");
     connect(&m_extractFutureWatcher, &QFutureWatcher<QStringList>::finished, this, &PackInstallTask::onUnzipFinished);
     connect(&m_extractFutureWatcher, &QFutureWatcher<QStringList>::canceled, this, &PackInstallTask::onUnzipCanceled);
@@ -139,76 +132,81 @@ void PackInstallTask::install()
     }
 
     QString instanceConfigPath = FS::PathCombine(m_stagingPath, "instance.cfg");
-    auto instanceSettings = std::make_shared<INISettingsObject>(instanceConfigPath);
-    instanceSettings->suspendSave();
+    m_instance =
+        std::make_unique<MinecraftInstance>(m_globalSettings, std::make_unique<INISettingsObject>(instanceConfigPath), m_stagingPath);
+    {
+        const SettingsObject::Lock lock(m_instance->settings());
 
-    MinecraftInstance instance(m_globalSettings, instanceSettings, m_stagingPath);
-    auto components = instance.getPackProfile();
-    components->buildingFromScratch();
-    components->setComponentVersion("net.minecraft", m_pack.mcVersion, true);
+        auto* components = m_instance->getPackProfile();
+        components->buildingFromScratch();
+        components->setComponentVersion("net.minecraft", m_pack.mcVersion, true);
 
-    bool fallback = true;
+        bool fallback = true;
 
-    // handle different versions
-    QFile packJson(m_stagingPath + "/minecraft/pack.json");
-    QDir jarmodDir = QDir(m_stagingPath + "/unzip/instMods");
-    if (packJson.exists()) {
-        packJson.open(QIODevice::ReadOnly | QIODevice::Text);
-        QJsonDocument doc = QJsonDocument::fromJson(packJson.readAll());
-        packJson.close();
+        // handle different versions
+        QFileInfo packJson(m_stagingPath + "/minecraft/pack.json");
+        QDir jarmodDir = QDir(m_stagingPath + "/unzip/instMods");
+        if (!packJson.exists()) {
+            qWarning() << "File doesn't exists:" << packJson.fileName();
+        } else {
+            auto doc = Json::requireDocument(packJson.absoluteFilePath());
+            if (doc) {
+                // we only care about the libs
+                auto libs = doc->object().value("libraries").toArray();
 
-        // we only care about the libs
-        QJsonArray libs = doc.object().value("libraries").toArray();
+                for (const auto& value : libs) {
+                    QString nameValue = value.toObject().value("name").toString();
+                    if (!nameValue.startsWith("net.minecraftforge")) {
+                        continue;
+                    }
 
-        for (const auto& value : libs) {
-            QString nameValue = value.toObject().value("name").toString();
-            if (!nameValue.startsWith("net.minecraftforge")) {
-                continue;
+                    GradleSpecifier forgeVersion(nameValue);
+
+                    components->setComponentVersion("net.minecraftforge",
+                                                    forgeVersion.version().replace(m_pack.mcVersion, "").replace("-", ""));
+                    QFile::remove(packJson.absoluteFilePath());
+                    fallback = false;
+                    break;
+                }
+            } else {
+                qWarning() << "Failed to read file as JSON:" << packJson.fileName();
+            }
+        }
+
+        if (jarmodDir.exists()) {
+            qDebug() << "Found jarmods, installing...";
+
+            QStringList jarmods;
+            for (const auto& info : jarmodDir.entryInfoList(QDir::NoDotAndDotDot | QDir::Files)) {
+                qDebug() << "Jarmod:" << info.fileName();
+                jarmods.push_back(info.absoluteFilePath());
             }
 
-            GradleSpecifier forgeVersion(nameValue);
-
-            components->setComponentVersion("net.minecraftforge", forgeVersion.version().replace(m_pack.mcVersion, "").replace("-", ""));
-            packJson.remove();
+            components->installJarMods(jarmods);
             fallback = false;
-            break;
-        }
-    }
-
-    if (jarmodDir.exists()) {
-        qDebug() << "Found jarmods, installing...";
-
-        QStringList jarmods;
-        for (auto info : jarmodDir.entryInfoList(QDir::NoDotAndDotDot | QDir::Files)) {
-            qDebug() << "Jarmod:" << info.fileName();
-            jarmods.push_back(info.absoluteFilePath());
         }
 
-        components->installJarMods(jarmods);
-        fallback = false;
+        // just nuke unzip directory, it s not needed anymore
+        FS::deletePath(m_stagingPath + "/unzip");
+
+        if (fallback) {
+            // TODO: Some fallback mechanism... or just keep failing!
+            emitFailed(tr("No installation method found!"));
+            return;
+        }
+
+        components->saveNow();
+
+        progress(4, 4);
+
+        m_instance->setName(name());
+        if (m_instIcon == "default") {
+            m_instIcon = "ftb_logo";
+        }
+        m_instance->setIconKey(m_instIcon);
     }
 
-    // just nuke unzip directory, it s not needed anymore
-    FS::deletePath(m_stagingPath + "/unzip");
-
-    if (fallback) {
-        // TODO: Some fallback mechanism... or just keep failing!
-        emitFailed(tr("No installation method found!"));
-        return;
-    }
-
-    components->saveNow();
-
-    progress(4, 4);
-
-    instance.setName(name());
-    if (m_instIcon == "default") {
-        m_instIcon = "ftb_logo";
-    }
-    instance.setIconKey(m_instIcon);
-    instanceSettings->resumeSave();
-
-    emitSucceeded();
+    downloadFiles(m_instance.get());
 }
 
 bool PackInstallTask::abort()
@@ -217,7 +215,7 @@ bool PackInstallTask::abort()
         return false;
     }
 
-    netJobContainer->abort();
+    m_netJobContainer->abort();
     return InstanceTask::abort();
 }
 

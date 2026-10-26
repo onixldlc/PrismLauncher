@@ -47,7 +47,7 @@
 #include "MojangDownloadInfo.h"
 #include "Rule.h"
 #include "RuntimeContext.h"
-#include "net/NetRequest.h"
+#include "net/Request.h"
 
 class Library;
 class MinecraftInstance;
@@ -129,7 +129,7 @@ class Library {
     void setHint(const QString& hint) { m_hint = hint; }
 
     /// Set the load rules
-    void setRules(QList<std::shared_ptr<Rule>> rules) { m_rules = rules; }
+    void setRules(QList<Rule> rules) { m_rules = rules; }
 
     /// Returns true if the library should be loaded (or extracted, in case of natives)
     bool isActive(const RuntimeContext& runtimeContext) const;
@@ -144,7 +144,7 @@ class Library {
     bool isForge() const;
 
     // Get a list of downloads for this library
-    QList<Net::NetRequest::Ptr> getDownloads(const RuntimeContext& runtimeContext,
+    QList<Net::Request::Ptr> getDownloads(const RuntimeContext& runtimeContext,
                                              class HttpMetaCache* cache,
                                              QStringList& failedLocalFiles,
                                              const QString& overridePath) const;
@@ -203,7 +203,7 @@ class Library {
     bool applyRules = false;
 
     /// rules associated with the library
-    QList<std::shared_ptr<Rule>> m_rules;
+    QList<Rule> m_rules;
 
     /// MOJANG: container with Mojang style download info
     MojangLibraryDownloadInfo::Ptr m_mojangDownloads;

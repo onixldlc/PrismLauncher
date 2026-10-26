@@ -35,13 +35,11 @@
 
 #pragma once
 
-#include <memory>
-
 #include <QString>
 #include <QStringList>
 #include <QUrl>
 
-#include "minecraft/mod/MetadataHandler.h"
+#include "modplatform/ModIndex.h"
 
 struct ModLicense {
     QString name = {};
@@ -142,23 +140,7 @@ struct ModDetails {
     /* Path of mod logo */
     QString icon_file = {};
 
-    ModDetails() = default;
+    QStringList dependencies = {};
 
-    /** Metadata should be handled manually to properly set the mod status. */
-    ModDetails(const ModDetails& other)
-        : mod_id(other.mod_id)
-        , name(other.name)
-        , version(other.version)
-        , mcversion(other.mcversion)
-        , homeurl(other.homeurl)
-        , description(other.description)
-        , authors(other.authors)
-        , issue_tracker(other.issue_tracker)
-        , licenses(other.licenses)
-        , icon_file(other.icon_file)
-    {}
-
-    ModDetails& operator=(const ModDetails& other) = default;
-
-    ModDetails& operator=(ModDetails&& other) = default;
+    ModPlatform::ModLoaderType loader = {};
 };

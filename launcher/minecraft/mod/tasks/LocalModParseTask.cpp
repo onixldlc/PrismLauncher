@@ -1,8 +1,6 @@
 #include "LocalModParseTask.h"
 
 #include <qdcss.h>
-#include <quazip/quazip.h>
-#include <quazip/quazipfile.h>
 #include <toml++/toml.h>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -10,9 +8,10 @@
 #include <QJsonValue>
 #include <QRegularExpression>
 #include <QString>
+#include <algorithm>
 
-#include "FileSystem.h"
 #include "Json.h"
+#include "archive/ArchiveReader.h"
 #include "minecraft/mod/ModDetails.h"
 #include "settings/INIFile.h"
 
@@ -25,13 +24,15 @@ namespace ModUtils {
 
 // OLD format:
 // https://github.com/MinecraftForge/FML/wiki/FML-mod-information-file/5bf6a2d05145ec79387acc0d45c958642fb049fc
-ModDetails ReadMCModInfo(QByteArray contents)
+ModDetails ReadMCModInfo(const QByteArray& contents)
 {
     auto getInfoFromArray = [](QJsonArray arr) -> ModDetails {
         if (!arr.at(0).isObject()) {
             return {};
         }
         ModDetails details;
+        details.loader = ModPlatform::ModLoaderType::Forge;
+
         auto firstObj = arr.at(0).toObject();
         details.mod_id = firstObj.value("modid").toString();
         auto name = firstObj.value("name").toString();
@@ -62,10 +63,39 @@ ModDetails ReadMCModInfo(QByteArray contents)
         for (auto author : authors) {
             details.authors.append(author.toString());
         }
+
+        if (details.mod_id.startsWith("mod_")) {
+            details.mod_id = details.mod_id.mid(4);
+        }
+
+        auto addDep = [&details](QString dep) {
+            if (dep == "mod_MinecraftForge" || dep == "Forge")
+                return;
+            if (dep.contains(":")) {
+                dep = dep.section(":", 1);
+            }
+            if (dep.contains("@")) {
+                dep = dep.section("@", 0, 0);
+            }
+            if (dep.startsWith("mod_")) {
+                dep = dep.mid(4);
+            }
+            details.dependencies.append(dep);
+        };
+
+        if (firstObj.contains("requiredMods")) {
+            for (auto dep : firstObj.value("requiredMods").toArray()) {
+                addDep(dep.toString());
+            }
+        } else if (firstObj.contains("dependencies")) {
+            for (auto dep : firstObj.value("dependencies").toArray()) {
+                addDep(dep.toString());
+            }
+        }
+
         return details;
     };
-    QJsonParseError jsonError;
-    QJsonDocument jsonDoc = QJsonDocument::fromJson(contents, &jsonError);
+    auto jsonDoc = Json::requireDocument(contents).value_or(QJsonDocument());
     // this is the very old format that had just the array
     if (jsonDoc.isArray()) {
         return getInfoFromArray(jsonDoc.array());
@@ -75,11 +105,11 @@ ModDetails ReadMCModInfo(QByteArray contents)
             val = jsonDoc.object().value("modListVersion");
         }
 
-        int version = Json::ensureInteger(val, -1);
+        int version = val.toInt(-1);
 
         // Some mods set the number with "", so it's a String instead
         if (version < 0)
-            version = Json::ensureString(val, "").toInt();
+            version = val.toString("").toInt();
 
         if (version != 2) {
             qWarning() << QString(R"(The value of 'modListVersion' is "%1" (expected "2")! The file may be corrupted.)").arg(version);
@@ -99,15 +129,19 @@ ModDetails ReadMCModInfo(QByteArray contents)
 }
 
 // https://github.com/MinecraftForge/Documentation/blob/5ab4ba6cf9abc0ac4c0abd96ad187461aefd72af/docs/gettingstarted/structuring.md
-ModDetails ReadMCModTOML(QByteArray contents)
+ModDetails ReadMCModTOML(const QByteArray& contents)
 {
     ModDetails details;
+    details.loader = ModPlatform::ModLoaderType::Forge;
 
     toml::table tomlData;
 #if TOML_EXCEPTIONS
+    // Catch std::exception instead of toml::parse_error to work around
+    // the latter not being caught here when compiled with libc++.
+    // See https://github.com/PrismLauncher/PrismLauncher/issues/6047.
     try {
         tomlData = toml::parse(contents.toStdString());
-    } catch ([[maybe_unused]] const toml::parse_error& err) {
+    } catch ([[maybe_unused]] const std::exception& err) {
         return {};
     }
 #else
@@ -199,18 +233,63 @@ ModDetails ReadMCModTOML(QByteArray contents)
     }
     details.icon_file = logoFile;
 
+    auto parseDep = [&details](toml::array* dependencies) {
+        static const QStringList ignoreModIds = { "", "forge", "neoforge", "minecraft" };
+        if (!dependencies) {
+            return;
+        }
+        auto isNeoForgeDep = [](toml::table* t) {
+            auto type = (*t)["type"].as_string();
+            return type && type->get() == "required";
+        };
+        auto isForgeDep = [](toml::table* t) {
+            auto mandatory = (*t)["mandatory"].as_boolean();
+            return mandatory && mandatory->get();
+        };
+        for (auto& dep : *dependencies) {
+            auto dep_table = dep.as_table();
+            if (!dep_table) {
+                continue;
+            }
+            auto modId = (*dep_table)["modId"].as_string();
+            if (!modId || ignoreModIds.contains(QString::fromStdString(modId->get()))) {
+                continue;
+            }
+            if (isNeoForgeDep(dep_table) || isForgeDep(dep_table)) {
+                details.dependencies.append(QString::fromStdString(modId->get()));
+            }
+        }
+    };
+
+    if (tomlData.contains("dependencies")) {
+        auto depValue = tomlData["dependencies"];
+        if (auto array = depValue.as_array()) {
+            parseDep(array);
+        } else if (auto depTable = depValue.as_table()) {
+            auto expectedKey = details.mod_id.toStdString();
+            if (!depTable->contains(expectedKey)) {
+                if (auto it = depTable->begin(); it != depTable->end()) {
+                    expectedKey = it->first;
+                }
+            }
+            if ((array = (*depTable)[expectedKey].as_array())) {
+                parseDep(array);
+            }
+        }
+    }
+
     return details;
 }
 
 // https://fabricmc.net/wiki/documentation:fabric_mod_json
-ModDetails ReadFabricModInfo(QByteArray contents)
+ModDetails ReadFabricModInfo(const QByteArray& contents)
 {
-    QJsonParseError jsonError;
-    QJsonDocument jsonDoc = QJsonDocument::fromJson(contents, &jsonError);
+    auto jsonDoc = Json::requireDocument(contents).value_or(QJsonDocument());
     auto object = jsonDoc.object();
     auto schemaVersion = object.contains("schemaVersion") ? object.value("schemaVersion").toInt(0) : 0;
 
     ModDetails details;
+    details.loader = ModPlatform::ModLoaderType::Fabric;
 
     details.mod_id = object.value("id").toString();
     details.version = object.value("version").toString();
@@ -266,24 +345,34 @@ ModDetails ReadFabricModInfo(QByteArray contents)
                 auto obj = icon.toObject();
                 // take the largest icon
                 int largest = 0;
-                for (auto key : obj.keys()) {
+                QString bestIcon;
+                for (const auto& key : obj.keys()) {
                     auto size = key.split('x').first().toInt();
                     if (size > largest) {
                         largest = size;
+                        bestIcon = obj.value(key).toString();
                     }
                 }
-                if (largest > 0) {
-                    auto key = QString::number(largest) + "x" + QString::number(largest);
-                    details.icon_file = obj.value(key).toString();
-                } else {  // parsing the sizes failed
+                if (!bestIcon.isEmpty()) {
+                    details.icon_file = bestIcon;
+                } else if (!obj.isEmpty()) {
                     // take the first
-                    for (auto i : obj) {
-                        details.icon_file = i.toString();
-                        break;
-                    }
+                    details.icon_file = obj.begin().value().toString();
                 }
             } else if (icon.isString()) {
                 details.icon_file = icon.toString();
+            }
+        }
+
+        if (object.contains("depends")) {
+            auto depends = object.value("depends");
+            if (depends.isObject()) {
+                auto obj = depends.toObject();
+                for (auto key : obj.keys()) {
+                    if (key != "fabricloader" && key != "minecraft" && !key.startsWith("fabric-")) {
+                        details.dependencies.append(key);
+                    }
+                }
             }
         }
     }
@@ -291,99 +380,124 @@ ModDetails ReadFabricModInfo(QByteArray contents)
 }
 
 // https://github.com/QuiltMC/rfcs/blob/master/specification/0002-quilt.mod.json.md
-ModDetails ReadQuiltModInfo(QByteArray contents)
+ModDetails ReadQuiltModInfo(const QByteArray& contents)
 {
     ModDetails details;
-    try {
-        QJsonParseError jsonError;
-        QJsonDocument jsonDoc = QJsonDocument::fromJson(contents, &jsonError);
-        auto object = Json::requireObject(jsonDoc, "quilt.mod.json");
-        auto schemaVersion = Json::ensureInteger(object.value("schema_version"), 0, "Quilt schema_version");
+    details.loader = ModPlatform::ModLoaderType::Quilt;
+
+    auto parse = [&details, contents]() -> Result<> {
+        TRY_INTO(const auto& object, Json::requireObject(contents, "quilt.mod.json"))
+        auto schemaVersion = object.value("schema_version").toInt();
 
         // https://github.com/QuiltMC/rfcs/blob/be6ba280d785395fefa90a43db48e5bfc1d15eb4/specification/0002-quilt.mod.json.md
-        if (schemaVersion == 1) {
-            auto modInfo = Json::requireObject(object.value("quilt_loader"), "Quilt mod info");
+        if (schemaVersion != 1) {
+            return {};
+        }
 
-            details.mod_id = Json::requireString(modInfo.value("id"), "Mod ID");
-            details.version = Json::requireString(modInfo.value("version"), "Mod version");
+        TRY_INTO(const auto& modInfo, Json::requireObject(object.value("quilt_loader"), "Quilt mod info"))
+        TRY_INTO(details.mod_id, Json::requireString(modInfo.value("id"), "Mod ID"))
+        TRY_INTO(details.version, Json::requireString(modInfo.value("version"), "Mod version"))
 
-            auto modMetadata = Json::ensureObject(modInfo.value("metadata"));
+        auto modMetadata = modInfo.value("metadata").toObject();
 
-            details.name = Json::ensureString(modMetadata.value("name"), details.mod_id);
-            details.description = Json::ensureString(modMetadata.value("description"));
+        details.name = modMetadata.value("name").toString(details.mod_id);
+        details.description = modMetadata.value("description").toString();
 
-            auto modContributors = Json::ensureObject(modMetadata.value("contributors"));
+        auto modContributors = modMetadata.value("contributors").toObject();
 
-            // We don't really care about the role of a contributor here
-            details.authors += modContributors.keys();
+        // We don't really care about the role of a contributor here
+        details.authors += modContributors.keys();
 
-            auto modContact = Json::ensureObject(modMetadata.value("contact"));
+        auto modContact = modMetadata.value("contact").toObject();
 
-            if (modContact.contains("homepage")) {
-                details.homeurl = Json::requireString(modContact.value("homepage"));
-            }
-            if (modContact.contains("issues")) {
-                details.issue_tracker = Json::requireString(modContact.value("issues"));
-            }
+        if (modContact.contains("homepage")) {
+            TRY_INTO(details.homeurl, Json::requireString(modContact.value("homepage")))
+        }
+        if (modContact.contains("issues")) {
+            TRY_INTO(details.issue_tracker, Json::requireString(modContact.value("issues")))
+        }
 
-            if (modMetadata.contains("license")) {
-                auto license = modMetadata.value("license");
-                if (license.isArray()) {
-                    for (auto l : license.toArray()) {
-                        if (l.isString()) {
-                            details.licenses.append(ModLicense(l.toString()));
-                        } else if (l.isObject()) {
-                            auto obj = l.toObject();
-                            details.licenses.append(ModLicense(obj.value("name").toString(), obj.value("id").toString(),
-                                                               obj.value("url").toString(), obj.value("description").toString()));
-                        }
+        if (modMetadata.contains("license")) {
+            auto license = modMetadata.value("license");
+            if (license.isArray()) {
+                for (auto l : license.toArray()) {
+                    if (l.isString()) {
+                        details.licenses.append(ModLicense(l.toString()));
+                    } else if (l.isObject()) {
+                        auto obj = l.toObject();
+                        details.licenses.append(ModLicense(obj.value("name").toString(), obj.value("id").toString(),
+                                                           obj.value("url").toString(), obj.value("description").toString()));
                     }
-                } else if (license.isString()) {
-                    details.licenses.append(ModLicense(license.toString()));
-                } else if (license.isObject()) {
-                    auto obj = license.toObject();
-                    details.licenses.append(ModLicense(obj.value("name").toString(), obj.value("id").toString(),
-                                                       obj.value("url").toString(), obj.value("description").toString()));
                 }
+            } else if (license.isString()) {
+                details.licenses.append(ModLicense(license.toString()));
+            } else if (license.isObject()) {
+                auto obj = license.toObject();
+                details.licenses.append(ModLicense(obj.value("name").toString(), obj.value("id").toString(), obj.value("url").toString(),
+                                                   obj.value("description").toString()));
             }
+        }
 
-            if (modMetadata.contains("icon")) {
-                auto icon = modMetadata.value("icon");
-                if (icon.isObject()) {
-                    auto obj = icon.toObject();
-                    // take the largest icon
-                    int largest = 0;
-                    for (auto key : obj.keys()) {
-                        auto size = key.split('x').first().toInt();
-                        if (size > largest) {
-                            largest = size;
-                        }
+        if (modMetadata.contains("icon")) {
+            auto icon = modMetadata.value("icon");
+            if (icon.isObject()) {
+                auto obj = icon.toObject();
+                // take the largest icon
+                int largest = 0;
+                for (const auto& key : obj.keys()) {
+                    auto size = key.split('x').first().toInt();
+                    largest = std::max(size, largest);
+                }
+                if (largest > 0) {
+                    auto key = QString::number(largest) + "x" + QString::number(largest);
+                    details.icon_file = obj.value(key).toString();
+                } else {  // parsing the sizes failed
+                    // take the first
+                    if (auto it = obj.begin(); it != obj.end()) {
+                        details.icon_file = it->toString();
                     }
-                    if (largest > 0) {
-                        auto key = QString::number(largest) + "x" + QString::number(largest);
-                        details.icon_file = obj.value(key).toString();
-                    } else {  // parsing the sizes failed
-                        // take the first
-                        for (auto i : obj) {
-                            details.icon_file = i.toString();
-                            break;
+                }
+            } else if (icon.isString()) {
+                details.icon_file = icon.toString();
+            }
+        }
+        if (object.contains("depends")) {
+            auto depends = object.value("depends");
+            if (depends.isArray()) {
+                auto array = depends.toArray();
+                for (auto obj : array) {
+                    QString modId;
+                    if (obj.isString()) {
+                        modId = obj.toString();
+                    } else if (obj.isObject()) {
+                        auto objValue = obj.toObject();
+                        modId = objValue.value("id").toString();
+                        if (objValue.contains("optional") && objValue.value("optional").toBool()) {
+                            continue;
                         }
+                    } else {
+                        continue;
                     }
-                } else if (icon.isString()) {
-                    details.icon_file = icon.toString();
+                    if (modId != "minecraft" && !modId.startsWith("quilt_")) {
+                        details.dependencies.append(modId);
+                    }
                 }
             }
         }
 
-    } catch (const Exception& e) {
-        qWarning() << "Unable to parse mod info:" << e.cause();
+        return {};
+    };
+    auto result = parse();
+    if (!result) {
+        qWarning() << "Unable to parse mod info:" << result.error();
     }
     return details;
 }
 
-ModDetails ReadForgeInfo(QByteArray contents)
+ModDetails ReadForgeInfo(const QByteArray& contents)
 {
     ModDetails details;
+    details.loader = ModPlatform::ModLoaderType::Forge;
     // Read the data
     details.name = "Minecraft Forge";
     details.mod_id = "Forge";
@@ -401,11 +515,11 @@ ModDetails ReadForgeInfo(QByteArray contents)
     return details;
 }
 
-ModDetails ReadLiteModInfo(QByteArray contents)
+ModDetails ReadLiteModInfo(const QByteArray& contents)
 {
     ModDetails details;
-    QJsonParseError jsonError;
-    QJsonDocument jsonDoc = QJsonDocument::fromJson(contents, &jsonError);
+    details.loader = ModPlatform::ModLoaderType::LiteLoader;
+    auto jsonDoc = Json::requireDocument(contents).value_or(QJsonDocument());
     auto object = jsonDoc.object();
     if (object.contains("name")) {
         details.mod_id = details.name = object.value("name").toString();
@@ -426,7 +540,7 @@ ModDetails ReadLiteModInfo(QByteArray contents)
 }
 
 // https://git.sleeping.town/unascribed/NilLoader/src/commit/d7fc87b255fc31019ff90f80d45894927fac6efc/src/main/java/nilloader/api/NilMetadata.java#L64
-ModDetails ReadNilModInfo(QByteArray contents, QString fname)
+ModDetails ReadNilModInfo(const QByteArray& contents, QString fname)
 {
     ModDetails details;
 
@@ -454,14 +568,12 @@ ModDetails ReadNilModInfo(QByteArray contents, QString fname)
 bool process(Mod& mod, ProcessingLevel level)
 {
     switch (mod.type()) {
-        case ResourceType::FOLDER:
-            return processFolder(mod, level);
         case ResourceType::ZIPFILE:
             return processZIP(mod, level);
         case ResourceType::LITEMOD:
             return processLitemod(mod);
         default:
-            qWarning() << "Invalid type for mod parse task!";
+            qWarning() << "Invalid type" << mod.type() << "for mod parse task!";
             return false;
     }
 }
@@ -470,32 +582,36 @@ bool processZIP(Mod& mod, [[maybe_unused]] ProcessingLevel level)
 {
     ModDetails details;
 
-    QuaZip zip(mod.fileinfo().filePath());
-    if (!zip.open(QuaZip::mdUnzip))
-        return false;
+    MMCZip::ArchiveReader zip(mod.fileinfo().filePath());
 
-    QuaZipFile file(&zip);
+    bool baseForgePopulated = false;
+    bool isNilMod = false;
+    bool isValid = false;
+    QString manifestVersion = {};
+    QByteArray nilData = {};
+    QString nilFilePath = {};
 
-    if (zip.setCurrentFile("META-INF/mods.toml") || zip.setCurrentFile("META-INF/neoforge.mods.toml")) {
-        if (!file.open(QIODevice::ReadOnly)) {
-            zip.close();
-            return false;
-        }
+    if (const auto result = zip.parse([&details, &baseForgePopulated, &manifestVersion, &isValid, &nilData, &isNilMod, &nilFilePath](
+                       MMCZip::ArchiveReader::File* file) -> Result<bool> {
+            auto filePath = file->filename();
 
-        details = ReadMCModTOML(file.readAll());
-        file.close();
-
-        // to replace ${file.jarVersion} with the actual version, as needed
-        if (details.version == "${file.jarVersion}") {
-            if (zip.setCurrentFile("META-INF/MANIFEST.MF")) {
-                if (!file.open(QIODevice::ReadOnly)) {
-                    zip.close();
-                    return false;
+            if (filePath == "META-INF/mods.toml" || filePath == "META-INF/neoforge.mods.toml") {
+                TRY_INTO(details, file->readAll().transform([](const auto& v) { return ReadMCModTOML(v); }))
+                if (filePath == "META-INF/neoforge.mods.toml") {
+                    details.loader = ModPlatform::ModLoaderType::NeoForge;
                 }
 
+                isValid = true;
+                if (details.version == "${file.jarVersion}" && !manifestVersion.isEmpty()) {
+                    details.version = manifestVersion;
+                }
+                baseForgePopulated = true;
+                return details.version != "${file.jarVersion}";
+            }
+            if (filePath == "META-INF/MANIFEST.MF") {
                 // quick and dirty line-by-line parser
-                auto manifestLines = QString(file.readAll()).split(s_newlineRegex);
-                QString manifestVersion = "";
+                TRY_INTO(auto manifestLines, file->readAll().transform([](const auto& v) { return QString(v).split(s_newlineRegex); }));
+                manifestVersion = "";
                 for (auto& line : manifestLines) {
                     if (line.startsWith("Implementation-Version: ", Qt::CaseInsensitive)) {
                         manifestVersion = line.remove("Implementation-Version: ", Qt::CaseInsensitive);
@@ -508,141 +624,73 @@ bool processZIP(Mod& mod, [[maybe_unused]] ProcessingLevel level)
                 if (manifestVersion.contains("task ':jar' property 'archiveVersion'") || manifestVersion == "") {
                     manifestVersion = "NONE";
                 }
-
-                details.version = manifestVersion;
-
-                file.close();
+                if (baseForgePopulated) {
+                    details.version = manifestVersion;
+                }
+                return baseForgePopulated;
             }
-        }
-
-        zip.close();
-        mod.setDetails(details);
-
-        return true;
-    } else if (zip.setCurrentFile("mcmod.info")) {
-        if (!file.open(QIODevice::ReadOnly)) {
-            zip.close();
-            return false;
-        }
-
-        details = ReadMCModInfo(file.readAll());
-        file.close();
-        zip.close();
-
-        mod.setDetails(details);
-        return true;
-    } else if (zip.setCurrentFile("quilt.mod.json")) {
-        if (!file.open(QIODevice::ReadOnly)) {
-            zip.close();
-            return false;
-        }
-
-        details = ReadQuiltModInfo(file.readAll());
-        file.close();
-        zip.close();
-
-        mod.setDetails(details);
-        return true;
-    } else if (zip.setCurrentFile("fabric.mod.json")) {
-        if (!file.open(QIODevice::ReadOnly)) {
-            zip.close();
-            return false;
-        }
-
-        details = ReadFabricModInfo(file.readAll());
-        file.close();
-        zip.close();
-
-        mod.setDetails(details);
-        return true;
-    } else if (zip.setCurrentFile("forgeversion.properties")) {
-        if (!file.open(QIODevice::ReadOnly)) {
-            zip.close();
-            return false;
-        }
-
-        details = ReadForgeInfo(file.readAll());
-        file.close();
-        zip.close();
-
-        mod.setDetails(details);
-        return true;
-    } else if (zip.setCurrentFile("META-INF/nil/mappings.json")) {
-        // nilloader uses the filename of the metadata file for the modid, so we can't know the exact filename
-        // thankfully, there is a good file to use as a canary so we don't look for nil meta all the time
-
-        QString foundNilMeta;
-        for (auto& fname : zip.getFileNameList()) {
+            if (filePath == "mcmod.info") {
+                TRY_INTO(details, file->readAll().transform([](const auto& v) { return ReadMCModInfo(v); }))
+                isValid = true;
+                return true;
+            }
+            if (filePath == "quilt.mod.json") {
+                TRY_INTO(details, file->readAll().transform([](const auto& v) { return ReadQuiltModInfo(v); }))
+                isValid = true;
+                return true;
+            }
+            if (filePath == "fabric.mod.json") {
+                TRY_INTO(details, file->readAll().transform([](const auto& v) { return ReadFabricModInfo(v); }))
+                isValid = true;
+                return true;
+            }
+            if (filePath == "forgeversion.properties") {
+                TRY_INTO(details, file->readAll().transform([](const auto& v) { return ReadForgeInfo(v); }))
+                isValid = true;
+                return true;
+            }
+            if (filePath == "META-INF/nil/mappings.json") {
+                // nilloader uses the filename of the metadata file for the modid, so we can't know the exact filename
+                // thankfully, there is a good file to use as a canary so we don't look for nil meta all the time
+                isNilMod = true;
+                TRY(file->skip());
+                return !nilFilePath.isEmpty();
+            }
             // nilmods can shade nilloader to be able to run as a standalone agent - which includes nilloader's own meta file
-            if (fname.endsWith(".nilmod.css") && fname != "nilloader.nilmod.css") {
-                foundNilMeta = fname;
-                break;
+            if (filePath.endsWith(".nilmod.css") && filePath != "nilloader.nilmod.css") {
+                TRY_INTO(nilData, file->readAll())
+                nilFilePath = filePath;
+                return isNilMod;
             }
-        }
-
-        if (zip.setCurrentFile(foundNilMeta)) {
-            if (!file.open(QIODevice::ReadOnly)) {
-                zip.close();
-                return false;
-            }
-
-            details = ReadNilModInfo(file.readAll(), foundNilMeta);
-            file.close();
-            zip.close();
-
-            mod.setDetails(details);
-            return true;
-        }
+            TRY(file->skip());
+            return false;
+        }); !result) {
+        qWarning() << "Could not parse mod zip:" << result.error();
+        return false;
     }
-
-    zip.close();
-    return false;  // no valid mod found in archive
-}
-
-bool processFolder(Mod& mod, [[maybe_unused]] ProcessingLevel level)
-{
-    ModDetails details;
-
-    QFileInfo mcmod_info(FS::PathCombine(mod.fileinfo().filePath(), "mcmod.info"));
-    if (mcmod_info.exists() && mcmod_info.isFile()) {
-        QFile mcmod(mcmod_info.filePath());
-        if (!mcmod.open(QIODevice::ReadOnly))
-            return false;
-        auto data = mcmod.readAll();
-        if (data.isEmpty() || data.isNull())
-            return false;
-        details = ReadMCModInfo(data);
-
+    if (isNilMod) {
+        details = ReadNilModInfo(nilData, nilFilePath);
+        isValid = true;
+    }
+    if (isValid) {
         mod.setDetails(details);
         return true;
     }
-
-    return false;  // no valid mcmod.info file found
+    return false;  // no valid mod found in archive
 }
 
 bool processLitemod(Mod& mod, [[maybe_unused]] ProcessingLevel level)
 {
     ModDetails details;
 
-    QuaZip zip(mod.fileinfo().filePath());
-    if (!zip.open(QuaZip::mdUnzip))
-        return false;
+    MMCZip::ArchiveReader zip(mod.fileinfo().filePath());
 
-    QuaZipFile file(&zip);
-
-    if (zip.setCurrentFile("litemod.json")) {
-        if (!file.open(QIODevice::ReadOnly)) {
-            zip.close();
-            return false;
-        }
-
-        details = ReadLiteModInfo(file.readAll());
-        file.close();
+    if (const auto dataRes = zip.readFile("litemod.json"); dataRes) {
+        details = ReadLiteModInfo(dataRes.value());
 
         mod.setDetails(details);
         return true;
     }
-    zip.close();
 
     return false;  // no valid litemod.json found in archive
 }
@@ -679,45 +727,11 @@ bool loadIconFile(const Mod& mod, QPixmap* pixmap)
     };
 
     switch (mod.type()) {
-        case ResourceType::FOLDER: {
-            QFileInfo icon_info(FS::PathCombine(mod.fileinfo().filePath(), mod.iconPath()));
-            if (icon_info.exists() && icon_info.isFile()) {
-                QFile icon(icon_info.filePath());
-                if (!icon.open(QIODevice::ReadOnly)) {
-                    return png_invalid("failed  to open file " + icon_info.filePath());
-                }
-                auto data = icon.readAll();
-
-                bool icon_result = ModUtils::processIconPNG(mod, std::move(data), pixmap);
-
-                icon.close();
-
-                if (!icon_result) {
-                    return png_invalid("invalid png image");  // icon invalid
-                }
-                return true;
-            }
-            return png_invalid("file '" + icon_info.filePath() + "' does not exists or is not a file");
-        }
         case ResourceType::ZIPFILE: {
-            QuaZip zip(mod.fileinfo().filePath());
-            if (!zip.open(QuaZip::mdUnzip))
-                return png_invalid("failed to open '" + mod.fileinfo().filePath() + "' as a zip archive");
+            MMCZip::ArchiveReader zip(mod.fileinfo().filePath());
+            if (auto dataRes = zip.readFile(mod.iconPath()); dataRes) {
+                bool icon_result = ModUtils::processIconPNG(mod, std::move(dataRes.value()), pixmap);
 
-            QuaZipFile file(&zip);
-
-            if (zip.setCurrentFile(mod.iconPath())) {
-                if (!file.open(QIODevice::ReadOnly)) {
-                    qCritical() << "Failed to open file in zip.";
-                    zip.close();
-                    return png_invalid("Failed to open '" + mod.iconPath() + "' in zip archive");
-                }
-
-                auto data = file.readAll();
-
-                bool icon_result = ModUtils::processIconPNG(mod, std::move(data), pixmap);
-
-                file.close();
                 if (!icon_result) {
                     return png_invalid("invalid png image");  // icon png invalid
                 }

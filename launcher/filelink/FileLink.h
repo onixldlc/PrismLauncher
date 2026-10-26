@@ -38,7 +38,6 @@
 #include "FileSystem.h"
 
 class FileLinkApp : public QCoreApplication {
-    // friends for the purpose of limiting access to deprecated stuff
     Q_OBJECT
    public:
     enum Status { Starting, Failed, Succeeded, Initialized };
@@ -56,16 +55,10 @@ class FileLinkApp : public QCoreApplication {
 
     bool m_useHardLinks = false;
 
-    QDateTime m_startTime;
     QLocalSocket socket;
     QDataStream in;
     quint32 blockSize;
 
     QList<FS::LinkPair> m_links_to_make;
     QList<FS::LinkResult> m_path_results;
-
-#if defined Q_OS_WIN32
-    // used on Windows to attach the standard IO streams
-    bool consoleAttached = false;
-#endif
 };

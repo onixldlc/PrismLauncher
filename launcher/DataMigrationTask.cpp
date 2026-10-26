@@ -6,13 +6,12 @@
 
 #include "FileSystem.h"
 
-#include <QDirIterator>
 #include <QFileInfo>
 #include <QMap>
 
 #include <QtConcurrent>
 
-DataMigrationTask::DataMigrationTask(const QString& sourcePath, const QString& targetPath, const IPathMatcher::Ptr pathMatcher)
+DataMigrationTask::DataMigrationTask(const QString& sourcePath, const QString& targetPath, Filter pathMatcher)
     : Task(), m_sourcePath(sourcePath), m_targetPath(targetPath), m_pathMatcher(pathMatcher), m_copy(sourcePath, targetPath)
 {
     m_copy.matcher(m_pathMatcher).whitelist(true);
@@ -45,7 +44,7 @@ void DataMigrationTask::dryRunFinished()
     // 2. Copy
     // Actually copy all files now.
     m_toCopy = m_copy.totalCopied();
-    connect(&m_copy, &FS::copy::fileCopied, [&, this](const QString& relativeName) {
+    connect(&m_copy, &FS::copy::fileCopied, this, [this](const QString& relativeName) {
         QString shortenedName = relativeName;
         // shorten the filename to hopefully fit into one line
         if (shortenedName.length() > 50)
@@ -63,7 +62,7 @@ void DataMigrationTask::dryRunFinished()
 
 void DataMigrationTask::dryRunAborted()
 {
-    emitFailed(tr("Aborted"));
+    emitAborted();
 }
 
 void DataMigrationTask::copyFinished()
@@ -81,5 +80,5 @@ void DataMigrationTask::copyFinished()
 
 void DataMigrationTask::copyAborted()
 {
-    emitFailed(tr("Aborted"));
+    emitAborted();
 }

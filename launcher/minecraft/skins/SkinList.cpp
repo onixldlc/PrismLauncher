@@ -45,9 +45,9 @@ void SkinList::startWatching()
     update();
     m_isWatching = m_watcher->addPath(m_dir.absolutePath());
     if (m_isWatching) {
-        qDebug() << "Started watching " << m_dir.absolutePath();
+        qDebug() << "Started watching" << m_dir.absolutePath();
     } else {
-        qDebug() << "Failed to start watching " << m_dir.absolutePath();
+        qDebug() << "Failed to start watching" << m_dir.absolutePath();
     }
 }
 
@@ -59,9 +59,9 @@ void SkinList::stopWatching()
     }
     m_isWatching = !m_watcher->removePath(m_dir.absolutePath());
     if (!m_isWatching) {
-        qDebug() << "Stopped watching " << m_dir.absolutePath();
+        qDebug() << "Stopped watching" << m_dir.absolutePath();
     } else {
-        qDebug() << "Failed to stop watching " << m_dir.absolutePath();
+        qDebug() << "Failed to stop watching" << m_dir.absolutePath();
     }
 }
 
@@ -72,18 +72,18 @@ bool SkinList::update()
 
     auto manifestInfo = QFileInfo(m_dir.absoluteFilePath("index.json"));
     if (manifestInfo.exists()) {
-        try {
-            auto doc = Json::requireDocument(manifestInfo.absoluteFilePath(), "SkinList JSON file");
-            const auto root = doc.object();
-            auto skins = Json::ensureArray(root, "skins");
+        auto doc = Json::requireDocument(manifestInfo.absoluteFilePath(), "SkinList JSON file");
+        if (!doc) {
+            qCritical() << "Couldn't load skins json:" << doc.error();
+        } else {
+            const auto root = doc->object();
+            auto skins = root["skins"].toArray();
             for (auto jSkin : skins) {
-                SkinModel s(m_dir, Json::ensureObject(jSkin));
+                SkinModel s(m_dir, jSkin.toObject());
                 if (s.isValid()) {
                     newSkins << s;
                 }
             }
-        } catch (const Exception& e) {
-            qCritical() << "Couldn't load skins json:" << e.cause();
         }
     }
 
@@ -121,7 +121,7 @@ bool SkinList::update()
     auto folderContents = m_dir.entryInfoList();
     // if there are any untracked files...
     for (QFileInfo entry : folderContents) {
-        if (!entry.isFile() && entry.suffix() != "png")
+        if (!entry.isFile() || entry.suffix() != "png")
             continue;
 
         SkinModel w(entry.absoluteFilePath());
@@ -167,7 +167,7 @@ void SkinList::directoryChanged(const QString& path)
 
 void SkinList::fileChanged(const QString& path)
 {
-    qDebug() << "Checking " << path;
+    qDebug() << "Checking" << path;
     QFileInfo checkfile(path);
     if (!checkfile.exists())
         return;
@@ -239,6 +239,8 @@ QVariant SkinList::data(const QModelIndex& index, int role) const
         return QVariant();
     auto skin = m_skinList[row];
     switch (role) {
+        case Qt::SizeHintRole:
+            return QSize(100, 36 + 30);
         case Qt::DecorationRole: {
             auto preview = skin.getPreview();
             if (preview.isNull()) {
@@ -247,9 +249,8 @@ QVariant SkinList::data(const QModelIndex& index, int role) const
             return preview;
         }
         case Qt::DisplayRole:
-            return skin.name();
+        case Qt::ToolTipRole:
         case Qt::UserRole:
-            return skin.name();
         case Qt::EditRole:
             return skin.name();
         default:
@@ -361,10 +362,9 @@ void SkinList::save()
         arr << s.toJSON();
     }
     doc["skins"] = arr;
-    try {
-        Json::write(doc, m_dir.absoluteFilePath("index.json"));
-    } catch (const FS::FileSystemException& e) {
-        qCritical() << "Failed to write skin index file :" << e.cause();
+    auto res = Json::write(doc, m_dir.absoluteFilePath("index.json"));
+    if (!res) {
+        qCritical() << "Failed to write skin index file :" << res.error();
     }
 }
 

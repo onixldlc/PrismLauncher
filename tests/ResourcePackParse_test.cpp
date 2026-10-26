@@ -30,7 +30,7 @@ class ResourcePackParseTest : public QObject {
    private slots:
     void test_parseZIP()
     {
-        QString source = QFINDTESTDATA("testdata/ResourcePackParse");
+        QString source = QFINDTESTDATA("testdata/Resources");
 
         QString zip_rp = FS::PathCombine(source, "test_resource_pack_idk.zip");
         ResourcePack pack{ QFileInfo(zip_rp) };
@@ -46,7 +46,7 @@ class ResourcePackParseTest : public QObject {
 
     void test_parseFolder()
     {
-        QString source = QFINDTESTDATA("testdata/ResourcePackParse");
+        QString source = QFINDTESTDATA("testdata/Resources");
 
         QString folder_rp = FS::PathCombine(source, "test_folder");
         ResourcePack pack{ QFileInfo(folder_rp) };
@@ -60,7 +60,7 @@ class ResourcePackParseTest : public QObject {
 
     void test_parseFolder2()
     {
-        QString source = QFINDTESTDATA("testdata/ResourcePackParse");
+        QString source = QFINDTESTDATA("testdata/Resources");
 
         QString folder_rp = FS::PathCombine(source, "another_test_folder");
         ResourcePack pack{ QFileInfo(folder_rp) };
@@ -69,7 +69,7 @@ class ResourcePackParseTest : public QObject {
 
         QVERIFY(pack.packFormat() == 6);
         QVERIFY(pack.description() == "o quartel pegou fogo, policia deu sinal, acode acode acode a bandeira nacional");
-        QVERIFY(valid == false);  // no assets dir
+        QVERIFY(valid == true);  // no assets dir but it is still valid based on https://minecraft.wiki/w/Resource_pack
     }
 };
 

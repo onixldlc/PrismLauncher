@@ -29,7 +29,7 @@ class NewsChecker : public QObject {
     /*!
      * Constructs a news reader to read from the given RSS feed URL.
      */
-    NewsChecker(shared_qobject_ptr<QNetworkAccessManager> network, const QString& feedUrl);
+    NewsChecker(QNetworkAccessManager* network, QString feedUrl);
 
     /*!
      * Returns the error message for the last time the news was loaded.
@@ -69,7 +69,7 @@ class NewsChecker : public QObject {
 
    protected slots:
     void rssDownloadFinished();
-    void rssDownloadFailed(QString reason);
+    void rssDownloadFailed(const QString& reason);
 
    protected: /* data */
     //! The URL for the RSS feed to fetch.
@@ -82,17 +82,18 @@ class NewsChecker : public QObject {
     NetJob::Ptr m_newsNetJob;
 
     //! True if news has been loaded.
-    bool m_loadedNews;
+    bool m_loadedNews = false;
 
-    std::shared_ptr<QByteArray> newsData = std::make_shared<QByteArray>();
+    //! The cache entry for the feed.
+    MetaEntryPtr m_entry;
 
     /*!
      * Gets the error message that was given last time the news was loaded.
      * If the last news load succeeded, this will be an empty string.
      */
-    QString m_lastLoadError;
+    QString m_lastLoadError{};
 
-    shared_qobject_ptr<QNetworkAccessManager> m_network;
+    QNetworkAccessManager* m_network;
 
    protected slots:
     /// Emits newsLoaded() and sets m_lastLoadError to empty string.

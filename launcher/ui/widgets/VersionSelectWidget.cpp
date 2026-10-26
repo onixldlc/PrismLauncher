@@ -36,7 +36,7 @@ VersionSelectWidget::VersionSelectWidget(QWidget* parent) : QWidget(parent)
     search->setPlaceholderText(tr("Search"));
     search->setClearButtonEnabled(true);
     verticalLayout->addWidget(search);
-    connect(search, &QLineEdit::textEdited, [this](const QString& value) {
+    connect(search, &QLineEdit::textEdited, this, [this](const QString& value) {
         m_proxyModel->setSearch(value);
         if (!value.isEmpty() || !listView->selectionModel()->hasSelection()) {
             const QModelIndex first = listView->model()->index(0, 0);
@@ -127,9 +127,9 @@ void VersionSelectWidget::closeEvent(QCloseEvent* event)
     QWidget::closeEvent(event);
 }
 
-void VersionSelectWidget::loadList()
+void VersionSelectWidget::loadList(bool forceReload)
 {
-    m_load_task = m_vlist->getLoadTask();
+    m_load_task = m_vlist->getLoadTask(forceReload);
     connect(m_load_task.get(), &Task::succeeded, this, &VersionSelectWidget::onTaskSucceeded);
     connect(m_load_task.get(), &Task::failed, this, &VersionSelectWidget::onTaskFailed);
     connect(m_load_task.get(), &Task::progress, this, &VersionSelectWidget::changeProgress);
@@ -224,20 +224,20 @@ BaseVersion::Ptr VersionSelectWidget::selectedVersion() const
 
 void VersionSelectWidget::setFuzzyFilter(BaseVersionList::ModelRoles role, QString filter)
 {
-    m_proxyModel->setFilter(role, new ContainsFilter(filter));
+    m_proxyModel->setFilter(role, Filters::contains(filter));
 }
 
 void VersionSelectWidget::setExactFilter(BaseVersionList::ModelRoles role, QString filter)
 {
-    m_proxyModel->setFilter(role, new ExactFilter(filter));
+    m_proxyModel->setFilter(role, Filters::equals(filter));
 }
 
 void VersionSelectWidget::setExactIfPresentFilter(BaseVersionList::ModelRoles role, QString filter)
 {
-    m_proxyModel->setFilter(role, new ExactIfPresentFilter(filter));
+    m_proxyModel->setFilter(role, Filters::equalsOrEmpty(filter));
 }
 
-void VersionSelectWidget::setFilter(BaseVersionList::ModelRoles role, Filter* filter)
+void VersionSelectWidget::setFilter(BaseVersionList::ModelRoles role, Filter filter)
 {
     m_proxyModel->setFilter(role, filter);
 }

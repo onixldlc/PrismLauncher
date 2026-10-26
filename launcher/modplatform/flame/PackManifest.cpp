@@ -1,71 +1,72 @@
 #include "PackManifest.h"
 #include "Json.h"
 
-static void loadFileV1(Flame::File& f, QJsonObject& file)
+namespace {
+Result<> loadFileV1(Flame::File& f, const QJsonObject& file)
 {
-    f.projectId = Json::requireInteger(file, "projectID");
-    f.fileId = Json::requireInteger(file, "fileID");
-    f.required = Json::ensureBoolean(file, QString("required"), true);
+    TRY_INTO(f.projectId, Json::requireInteger(file, "projectID"))
+    TRY_INTO(f.fileId, Json::requireInteger(file, "fileID"))
+    f.required = file["required"].toBool(true);
+    return {};
 }
 
-static void loadModloaderV1(Flame::Modloader& m, QJsonObject& modLoader)
+Result<> loadModloaderV1(Flame::Modloader& m, const QJsonObject& modLoader)
 {
-    m.id = Json::requireString(modLoader, "id");
-    m.primary = Json::ensureBoolean(modLoader, QString("primary"), false);
+    TRY_INTO(m.id, Json::requireString(modLoader, "id"))
+    m.primary = modLoader["primary"].toBool();
+    return {};
 }
 
-static void loadMinecraftV1(Flame::Minecraft& m, QJsonObject& minecraft)
+Result<> loadMinecraftV1(Flame::Minecraft& m, const QJsonObject& minecraft)
 {
-    m.version = Json::requireString(minecraft, "version");
+    TRY_INTO(m.version, Json::requireString(minecraft, "version"))
     // extra libraries... apparently only used for a custom Minecraft launcher in the 1.2.5 FTB retro pack
     // intended use is likely hardcoded in the 'Flame' client, the manifest says nothing
-    m.libraries = Json::ensureString(minecraft, QString("libraries"), QString());
-    auto arr = Json::ensureArray(minecraft, "modLoaders", QJsonArray());
-    for (QJsonValueRef item : arr) {
-        auto obj = Json::requireObject(item);
+    m.libraries = minecraft["libraries"].toString();
+    auto arr = minecraft["modLoaders"].toArray();
+    for (const auto& item : arr) {
         Flame::Modloader loader;
-        loadModloaderV1(loader, obj);
+        TRY(Json::requireObject(item).and_then([&loader](const auto& v) { return loadModloaderV1(loader, v); }))
         m.modLoaders.append(loader);
     }
-    m.recommendedRAM = Json::ensureInteger(minecraft, "recommendedRam", 0);
+    m.recommendedRAM = minecraft["recommendedRam"].toInt();
+    return {};
 }
 
-static void loadManifestV1(Flame::Manifest& pack, QJsonObject& manifest)
+Result<> loadManifestV1(Flame::Manifest& pack, const QJsonObject& manifest)
 {
-    auto mc = Json::requireObject(manifest, "minecraft");
+    TRY(Json::requireObject(manifest, "minecraft").and_then([&pack](const auto& v) { return loadMinecraftV1(pack.minecraft, v); }))
 
-    loadMinecraftV1(pack.minecraft, mc);
+    pack.name = manifest["name"].toString("Unnamed");
+    pack.version = manifest["version"].toString();
+    pack.author = manifest["author"].toString("Anonymous");
 
-    pack.name = Json::ensureString(manifest, QString("name"), "Unnamed");
-    pack.version = Json::ensureString(manifest, QString("version"), QString());
-    pack.author = Json::ensureString(manifest, QString("author"), "Anonymous");
-
-    auto arr = Json::ensureArray(manifest, "files", QJsonArray());
+    auto arr = manifest["files"].toArray();
     for (auto item : arr) {
-        auto obj = Json::requireObject(item);
-
         Flame::File file;
-        loadFileV1(file, obj);
+        TRY(Json::requireObject(item).and_then([&file](const auto& v) { return loadFileV1(file, v); }))
         Q_ASSERT(file.projectId != 0);
         pack.files.insert(file.fileId, file);
     }
 
-    pack.overrides = Json::ensureString(manifest, "overrides", "overrides");
+    pack.overrides = manifest["overrides"].toString("overrides");
 
-    pack.is_loaded = true;
+    pack.isLoaded = true;
+    return {};
 }
+}  // namespace
 
-void Flame::loadManifest(Flame::Manifest& m, const QString& filepath)
+Result<> Flame::loadManifest(Flame::Manifest& m, const QString& filepath)
 {
-    auto doc = Json::requireDocument(filepath);
-    auto obj = Json::requireObject(doc);
-    m.manifestType = Json::requireString(obj, "manifestType");
+    TRY_INTO(const auto& obj, Json::requireObject(filepath))
+    TRY_INTO(m.manifestType, Json::requireString(obj, "manifestType"))
     if (m.manifestType != "minecraftModpack") {
-        throw JSONValidationError("Not a modpack manifest!");
+        return std::unexpected("Not a modpack manifest!");
     }
-    m.manifestVersion = Json::requireInteger(obj, "manifestVersion");
+    TRY_INTO(m.manifestVersion, Json::requireInteger(obj, "manifestVersion"))
     if (m.manifestVersion != 1) {
-        throw JSONValidationError(QString("Unknown manifest version (%1)").arg(m.manifestVersion));
+        return std::unexpected(QString("Unknown manifest version (%1)").arg(m.manifestVersion));
     }
-    loadManifestV1(m, obj);
+    TRY(loadManifestV1(m, obj))
+    return {};
 }

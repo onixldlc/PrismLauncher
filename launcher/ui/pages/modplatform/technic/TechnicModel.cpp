@@ -37,8 +37,9 @@
 #include "Application.h"
 #include "BuildConfig.h"
 #include "Json.h"
+#include "settings/SettingsObject.h"
 
-#include "net/ApiDownload.h"
+#include "net/ApiRequest.h"
 #include "ui/widgets/ProjectItem.h"
 
 #include <QFileInfo>
@@ -71,7 +72,7 @@ QVariant Technic::ListModel::data(const QModelIndex& index, int role) const
             if (m_logoMap.contains(pack.logoName)) {
                 return (m_logoMap.value(pack.logoName));
             }
-            QIcon icon = APPLICATION->getThemedIcon("screenshot-placeholder");
+            QIcon icon = QIcon::fromTheme("screenshot-placeholder");
             ((ListModel*)this)->requestLogo(pack.logoName, pack.logoUrl);
             return icon;
         }
@@ -156,42 +157,43 @@ void Technic::ListModel::performSearch()
     if (!clientId.isEmpty()) {
         searchUrl += "?cid=" + clientId;
     }
-    netJob->addNetAction(Net::ApiDownload::makeByteArray(QUrl(searchUrl), response));
+    auto [action, response] = Net::ApiRequest::makeByteArray(QUrl(searchUrl));
+    netJob->addNetAction(action);
     jobPtr = netJob;
     jobPtr->start();
-    connect(netJob.get(), &NetJob::succeeded, this, &ListModel::searchRequestFinished);
+    connect(netJob.get(), &NetJob::succeeded, this, [this, response] { searchRequestFinished(response); });
     connect(netJob.get(), &NetJob::failed, this, &ListModel::searchRequestFailed);
 }
 
-void Technic::ListModel::searchRequestFinished()
+void Technic::ListModel::searchRequestFinished(QByteArray* responsePtr)
 {
+    // NOTE(TheKodeToad): moving the response out to avoid it from being destroyed by jobPtr.reset()
+    QByteArray response = std::move(*responsePtr);
     jobPtr.reset();
 
-    QJsonParseError parse_error;
-    QJsonDocument doc = QJsonDocument::fromJson(*response, &parse_error);
-    if (parse_error.error != QJsonParseError::NoError) {
-        qWarning() << "Error while parsing JSON response from Technic at " << parse_error.offset
-                   << " reason: " << parse_error.errorString();
-        qWarning() << *response;
+    auto doc = Json::requireObject(response);
+    if (!doc) {
+        qWarning() << "Error while parsing JSON response from Technic:" << doc.error();
+        qWarning() << response;
         return;
     }
 
+    const auto& root = doc.value();
     QList<Modpack> newList;
-    try {
-        auto root = Json::requireObject(doc);
-
+    auto parse = [&root, this, &newList]() -> Result<> {
         switch (searchMode) {
             case List: {
-                auto objs = Json::requireArray(root, "modpacks");
+                TRY_INTO(const auto& objs, Json::requireArray(root, "modpacks"))
                 for (auto technicPack : objs) {
                     Modpack pack;
-                    auto technicPackObject = Json::requireObject(technicPack);
-                    pack.name = Json::requireString(technicPackObject, "name");
-                    pack.slug = Json::requireString(technicPackObject, "slug");
-                    if (pack.slug == "vanilla")
+                    TRY_INTO(const auto& technicPackObject, Json::requireObject(technicPack))
+                    TRY_INTO(pack.name, Json::requireString(technicPackObject, "name"))
+                    TRY_INTO(pack.slug, Json::requireString(technicPackObject, "slug"))
+                    if (pack.slug == "vanilla") {
                         continue;
+                    }
 
-                    auto rawURL = Json::ensureString(technicPackObject, "iconUrl", "null");
+                    auto rawURL = technicPackObject["iconUrl"].toString("null");
                     if (rawURL == "null") {
                         pack.logoUrl = "null";
                         pack.logoName = "null";
@@ -211,12 +213,12 @@ void Technic::ListModel::searchRequestFinished()
                 }
 
                 Modpack pack;
-                pack.name = Json::requireString(root, "displayName");
-                pack.slug = Json::requireString(root, "name");
+                TRY_INTO(pack.name, Json::requireString(root, "displayName"))
+                TRY_INTO(pack.slug, Json::requireString(root, "name"))
 
                 if (root.contains("icon")) {
-                    auto iconObj = Json::requireObject(root, "icon");
-                    auto iconUrl = Json::requireString(iconObj, "url");
+                    TRY_INTO(const auto& iconUrl,
+                             Json::requireObject(root, "icon").and_then([](const auto& v) { return Json::requireString(v, "url"); }))
 
                     pack.logoUrl = iconUrl;
                     pack.logoName = pack.slug + "." + QFileInfo(QUrl(iconUrl).fileName()).suffix();
@@ -230,15 +232,18 @@ void Technic::ListModel::searchRequestFinished()
                 break;
             }
         }
-    } catch (const JSONValidationError& err) {
-        qCritical() << "Couldn't parse technic search results:" << err.cause();
+        return {};
+    };
+    if (auto res = parse(); !res) {
+        qCritical() << "Couldn't parse technic search results:" << res.error();
         return;
     }
     searchState = Finished;
 
     // When you have a Qt build with assertions turned on, proceeding here will abort the application
-    if (newList.size() == 0)
+    if (newList.size() == 0) {
         return;
+    }
 
     beginInsertRows(QModelIndex(), modpacks.size(), modpacks.size() + newList.size() - 1);
     modpacks.append(newList);
@@ -295,7 +300,7 @@ void Technic::ListModel::requestLogo(QString logo, QString url)
     MetaEntryPtr entry = APPLICATION->metacache()->resolveEntry("TechnicPacks", QString("logos/%1").arg(logo));
     auto job = new NetJob(QString("Technic Icon Download %1").arg(logo), APPLICATION->network());
     job->setAskRetry(false);
-    job->addNetAction(Net::ApiDownload::makeCached(QUrl(url), entry));
+    job->addNetAction(Net::ApiRequest::makeCached(QUrl(url), entry));
 
     auto fullPath = entry->getFullPath();
 

@@ -27,17 +27,14 @@
 #include "meta/Index.h"
 #include "minecraft/MinecraftInstance.h"
 #include "minecraft/PackProfile.h"
+#include "ui/dialogs/CustomMessageBox.h"
 #include "ui/widgets/PageContainer.h"
 #include "ui/widgets/VersionSelectWidget.h"
 
 class InstallLoaderPage : public VersionSelectWidget, public BasePage {
     Q_OBJECT
    public:
-    InstallLoaderPage(const QString& id,
-                      const QString& iconName,
-                      const QString& name,
-                      const Version& oldestVersion,
-                      const std::shared_ptr<PackProfile> profile)
+    InstallLoaderPage(const QString& id, const QString& iconName, const QString& name, const Version& oldestVersion, PackProfile* profile)
         : VersionSelectWidget(nullptr), uid(id), iconName(iconName), name(name)
     {
         const QString minecraftVersion = profile->getComponentVersion("net.minecraft");
@@ -53,7 +50,7 @@ class InstallLoaderPage : public VersionSelectWidget, public BasePage {
 
     QString id() const override { return uid; }
     QString displayName() const override { return name; }
-    QIcon icon() const override { return APPLICATION->getThemedIcon(iconName); }
+    QIcon icon() const override { return QIcon::fromTheme(iconName); }
 
     void openedImpl() override
     {
@@ -88,29 +85,35 @@ static InstallLoaderPage* pageCast(BasePage* page)
     return result;
 }
 
-InstallLoaderDialog::InstallLoaderDialog(std::shared_ptr<PackProfile> profile, const QString& uid, QWidget* parent)
-    : QDialog(parent), profile(std::move(profile)), container(new PageContainer(this, QString(), this)), buttons(new QDialogButtonBox(this))
+InstallLoaderDialog::InstallLoaderDialog(PackProfile* profile, const QString& uid, QWidget* parent)
+    : QDialog(parent), profile(profile), container(new PageContainer(this, QString(), this)), buttons(new QDialogButtonBox(this))
 {
     auto layout = new QVBoxLayout(this);
-
+    // small margins look ugly on macOS on modal windows
+    #ifndef Q_OS_MACOS
+    layout->setContentsMargins(0, 0, 0, 0);
+    #endif
     container->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Expanding);
     layout->addWidget(container);
 
     auto buttonLayout = new QHBoxLayout(this);
-
+    // small margins look ugly on macOS on modal windows
+    #ifndef Q_OS_MACOS
+    buttonLayout->setContentsMargins(0, 0, 6, 6);
+    #endif
     auto refreshButton = new QPushButton(tr("&Refresh"), this);
-    connect(refreshButton, &QPushButton::clicked, this, [this] { pageCast(container->selectedPage())->loadList(); });
+    connect(refreshButton, &QPushButton::clicked, this, [this] { pageCast(container->selectedPage())->loadList(true); });
     buttonLayout->addWidget(refreshButton);
 
     buttons->setOrientation(Qt::Horizontal);
     buttons->setStandardButtons(QDialogButtonBox::Cancel | QDialogButtonBox::Ok);
-    buttons->button(QDialogButtonBox::Ok)->setText(tr("Ok"));
+    buttons->button(QDialogButtonBox::Ok)->setText(tr("OK"));
     buttons->button(QDialogButtonBox::Cancel)->setText(tr("Cancel"));
     connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
     buttonLayout->addWidget(buttons);
 
-    layout->addLayout(buttonLayout);
+    container->addButtons(buttonLayout);
 
     setWindowTitle(dialogTitle());
     setWindowModality(Qt::WindowModal);
@@ -155,12 +158,67 @@ void InstallLoaderDialog::validate(BasePage* page)
     buttons->button(QDialogButtonBox::Ok)->setEnabled(pageCast(page)->selectedVersion() != nullptr);
 }
 
+bool InstallLoaderDialog::resolveLoaderConflicts(InstallLoaderPage* page)
+{
+    QList<ComponentPtr> conflicts;
+    auto knownLoader = Component::KNOWN_MODLOADERS.find(page->id());
+    if (knownLoader != Component::KNOWN_MODLOADERS.cend()) {
+        for (const QString& conflictId : knownLoader->knownConflictingComponents) {
+            const ComponentPtr conflictComponent = profile->getComponent(conflictId);
+            if (conflictComponent && conflictComponent->isEnabled() && !conflictComponent->isCustom())
+                conflicts.append(conflictComponent);
+        }
+    }
+
+    const QString targetVersion = QString("%1 %2").arg(page->displayName(), page->selectedVersion()->descriptor());
+
+    for (const ComponentPtr& conflict : conflicts) {
+        const QString conflictVersion = QString("%1 %2").arg(conflict->getName(), conflict->getVersion());
+        auto* msgBox = CustomMessageBox::selectable(
+            this, tr("Installing a second loader"),
+            tr("%1 is known to conflict with %2, which is enabled on this instance. Having both enabled at the same time will "
+               "likely break the instance.\n\nWhat would you like to do with %2?")
+                .arg(targetVersion, conflictVersion),
+            QMessageBox::Warning, QMessageBox::Cancel);
+        QAbstractButton* keepButton = msgBox->addButton(tr("Keep it"), QMessageBox::AcceptRole);
+        QAbstractButton* disableButton = conflict->canBeDisabled() ? msgBox->addButton(tr("Disable it"), QMessageBox::ActionRole) : nullptr;
+        QAbstractButton* uninstallButton =
+            conflict->isRemovable() ? msgBox->addButton(tr("Uninstall it"), QMessageBox::DestructiveRole) : nullptr;
+        msgBox->exec();
+
+        auto* clicked = msgBox->clickedButton();
+        if (clicked == keepButton)
+            continue;
+        if (disableButton && clicked == disableButton) {
+            conflict->setEnabled(false);
+            profile->resolve(Net::Mode::Online);
+            continue;
+        }
+        if (uninstallButton && clicked == uninstallButton) {
+            profile->remove(conflict->getID());
+            profile->resolve(Net::Mode::Online);
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
 void InstallLoaderDialog::done(int result)
 {
     if (result == Accepted) {
         auto* page = pageCast(container->selectedPage());
         if (page->selectedVersion()) {
+            if (!resolveLoaderConflicts(page))
+                return;
+
+            if (const ComponentPtr component = profile->getComponent(page->id()); component && !component->isEnabled())
+                component->setEnabled(true);
+
             profile->setComponentVersion(page->id(), page->selectedVersion()->descriptor());
+            if (auto component = profile->getComponent(page->id())) {
+                component->setEnabled(true);
+            }
             profile->resolve(Net::Mode::Online);
         }
     }

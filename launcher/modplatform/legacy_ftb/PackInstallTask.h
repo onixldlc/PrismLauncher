@@ -1,15 +1,10 @@
 #pragma once
-#include <quazip/quazip.h>
-#include <quazip/quazipdir.h>
 #include "InstanceTask.h"
 #include "PackHelpers.h"
-#include "meta/Index.h"
-#include "meta/Version.h"
-#include "meta/VersionList.h"
+#include "minecraft/MinecraftInstance.h"
 #include "net/NetJob.h"
 
-#include "net/NetJob.h"
-
+#include <memory>
 #include <optional>
 
 namespace LegacyFTB {
@@ -18,15 +13,15 @@ class PackInstallTask : public InstanceTask {
     Q_OBJECT
 
    public:
-    explicit PackInstallTask(shared_qobject_ptr<QNetworkAccessManager> network, const Modpack& pack, QString version);
-    virtual ~PackInstallTask() {}
+    explicit PackInstallTask(QNetworkAccessManager* network, Modpack pack, QString version);
+    ~PackInstallTask() override = default;
 
     bool canAbort() const override { return true; }
     bool abort() override;
 
    protected:
     //! Entry point for tasks.
-    virtual void executeTask() override;
+    void executeTask() override;
 
    private:
     void downloadPack();
@@ -39,13 +34,14 @@ class PackInstallTask : public InstanceTask {
     void onUnzipCanceled();
 
    private: /* data */
-    shared_qobject_ptr<QNetworkAccessManager> m_network;
-    bool abortable = false;
-    std::unique_ptr<QuaZip> m_packZip;
-    QFuture<std::optional<QStringList>> m_extractFuture;
-    QFutureWatcher<std::optional<QStringList>> m_extractFutureWatcher;
-    NetJob::Ptr netJobContainer;
-    QString archivePath;
+    QNetworkAccessManager* m_network;
+    bool m_abortable = false;
+    QFuture<Result<QStringList>> m_extractFuture;
+    QFutureWatcher<Result<QStringList>> m_extractFutureWatcher;
+    NetJob::Ptr m_netJobContainer;
+    QString m_archivePath;
+
+    std::unique_ptr<MinecraftInstance> m_instance;
 
     Modpack m_pack;
     QString m_version;

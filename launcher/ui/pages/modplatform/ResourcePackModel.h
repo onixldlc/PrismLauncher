@@ -6,10 +6,6 @@
 
 #include <QAbstractListModel>
 
-#include "BaseInstance.h"
-
-#include "modplatform/ModIndex.h"
-
 #include "ui/pages/modplatform/ResourceModel.h"
 
 class Version;
@@ -20,24 +16,21 @@ class ResourcePackResourceModel : public ResourceModel {
     Q_OBJECT
 
    public:
-    ResourcePackResourceModel(BaseInstance const&, ResourceAPI*);
+    ResourcePackResourceModel(ResourceFolderModel*, const ResourceAPI*, const QString& debugName, QString metaEntryBase);
 
     /* Ask the API for more information */
     void searchWithTerm(const QString& term, unsigned int sort);
 
-    void loadIndexedPack(ModPlatform::IndexedPack&, QJsonObject&) override = 0;
-    void loadExtraPackInfo(ModPlatform::IndexedPack&, QJsonObject&) override = 0;
-    void loadIndexedPackVersions(ModPlatform::IndexedPack&, QJsonArray&) override = 0;
+    [[nodiscard]] QString debugName() const override { return m_debugName; }
+    [[nodiscard]] QString metaEntryBase() const override { return m_metaEntryBase; }
 
    public slots:
     ResourceAPI::SearchArgs createSearchArguments() override;
     ResourceAPI::VersionSearchArgs createVersionsArguments(const QModelIndex&) override;
-    ResourceAPI::ProjectInfoArgs createInfoArguments(const QModelIndex&) override;
 
-   protected:
-    const BaseInstance& m_base_instance;
-
-    auto documentToArray(QJsonDocument& obj) const -> QJsonArray override = 0;
+   private:
+    QString m_debugName;
+    QString m_metaEntryBase;
 };
 
 }  // namespace ResourceDownload

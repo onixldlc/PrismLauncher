@@ -41,57 +41,36 @@
 namespace Net {
 
 /*
- * Sink object for downloads that uses an external QByteArray it doesn't own as a target.
+ * Sink object for downloads that uses an owned QByteArray as a target.
  */
 class ByteArraySink : public Sink {
    public:
-    ByteArraySink(std::shared_ptr<QByteArray> output) : m_output(output) {};
-
-    virtual ~ByteArraySink() = default;
+    ~ByteArraySink() override = default;
 
    public:
-    auto init(QNetworkRequest& request) -> Task::State override
+    InitResult init(QNetworkRequest& /*request*/) override
     {
-        if (m_output)
-            m_output->clear();
-        else
-            qWarning() << "ByteArraySink did not initialize the buffer because it's not addressable";
-        if (initAllValidators(request))
-            return Task::State::Running;
-        m_fail_reason = "Failed to initialize validators";
-        return Task::State::Failed;
+        m_output.clear();
+        initAllValidators();
+        return InitType::Ok;
     };
 
-    auto write(QByteArray& data) -> Task::State override
+    Result<> write(const QByteArray& data) override
     {
-        if (m_output)
-            m_output->append(data);
-        else
-            qWarning() << "ByteArraySink did not write the buffer because it's not addressable";
-        if (writeAllValidators(data))
-            return Task::State::Running;
-        m_fail_reason = "Failed to write validators";
-        return Task::State::Failed;
+        m_output.append(data);
+        writeAllValidators(data);
+        return {};
     }
 
-    auto abort() -> Task::State override
-    {
-        failAllValidators();
-        m_fail_reason = "Aborted";
-        return Task::State::Failed;
-    }
+    void abort() override { failAllValidators(); }
 
-    auto finalize(QNetworkReply& reply) -> Task::State override
-    {
-        if (finalizeAllValidators(reply))
-            return Task::State::Succeeded;
-        m_fail_reason = "Failed to finalize validators";
-        return Task::State::Failed;
-    }
+    Result<> finalize(QNetworkReply& /*reply*/) override { return finalizeAllValidators(); }
 
     auto hasLocalData() -> bool override { return false; }
 
+    QByteArray* output() { return &m_output; }
+
    protected:
-    std::shared_ptr<QByteArray> m_output;
+    QByteArray m_output;
 };
 }  // namespace Net

@@ -1,5 +1,9 @@
 name: Nix
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 on:
   push:
     branches:
@@ -13,6 +17,7 @@ on:
       - "**.h"
       - "**.java"
       - "**.ui"
+      - "**.md"
 
       # Build files
       - "**.nix"
@@ -29,17 +34,17 @@ on:
 
       # Files
       - "CMakeLists.txt"
-      - "COPYING.md"
 
       # Workflows
       - ".github/workflows/nix.yml"
-  pull_request_target:
+  pull_request:
     paths:
       # File types
       - "**.cpp"
       - "**.h"
       - "**.java"
       - "**.ui"
+      - "**.md"
 
       # Build files
       - "**.nix"
@@ -56,22 +61,22 @@ on:
 
       # Files
       - "CMakeLists.txt"
-      - "COPYING.md"
 
       # Workflows
       - ".github/workflows/nix.yml"
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 env:
   DEBUG: ${{ github.ref_type != 'tag' }}
-  USE_DETERMINATE: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     name: Build (${{ matrix.system }})
+
+    permissions:
+      contents: read
 
     strategy:
       fail-fast: false
@@ -83,46 +88,30 @@ jobs:
           - os: ubuntu-22.04-arm
             system: aarch64-linux
 
-          - os: macos-13
-            system: x86_64-darwin
-
-          - os: macos-14
+          - os: macos-26
             system: aarch64-darwin
 
     runs-on: ${{ matrix.os }}
 
-    permissions:
-      id-token: write
-
     steps:
-      - name: Get merge commit
-        if: ${{ github.event_name == 'pull_request_target' }}
-        id: merge-commit
-        uses: PrismLauncher/PrismLauncher/.github/actions/get-merge-commit@develop
-        with:
-          pull-request-id: ${{ github.event.number }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Checkout repository
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ steps.merge-commit.outputs.merge-commit-sha || github.sha }}
+        uses: actions/checkout@v7
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@v19
-        with:
-          determinate: ${{ env.USE_DETERMINATE }}
+        uses: cachix/install-nix-action@v31
 
         # For PRs
       - name: Setup Nix Magic Cache
-        if: ${{ env.USE_DETERMINATE == 'true' }}
-        uses: DeterminateSystems/flakehub-cache-action@v2
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: DeterminateSystems/magic-nix-cache-action@v15
+        with:
+          diagnostic-endpoint: ""
+          use-flakehub: false
 
         # For in-tree builds
       - name: Setup Cachix
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
-        uses: cachix/cachix-action@v16
+        uses: cachix/cachix-action@v17
         with:
           name: prismlauncher
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}

@@ -1,10 +1,9 @@
 #pragma once
 #include <QObject>
-#include <memory>
 
 #include "minecraft/auth/AuthStep.h"
 #include "net/NetJob.h"
-#include "net/Upload.h"
+#include "net/Request.h"
 
 class LauncherLoginStep : public AuthStep {
     Q_OBJECT
@@ -18,10 +17,9 @@ class LauncherLoginStep : public AuthStep {
     QString describe() override;
 
    private slots:
-    void onRequestDone();
+    void onRequestDone(QByteArray* response);
 
    private:
-    std::shared_ptr<QByteArray> m_response;
-    Net::Upload::Ptr m_request;
+    Net::Request::Ptr m_request;
     NetJob::Ptr m_task;
 };

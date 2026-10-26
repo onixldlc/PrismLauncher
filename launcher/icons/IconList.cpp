@@ -40,11 +40,12 @@
 #include <QFileSystemWatcher>
 #include <QMap>
 #include <QMimeData>
+#include <QPixmap>
 #include <QSet>
 #include <QUrl>
+#include "Application.h"
 #include "icons/IconUtils.h"
-
-#define MAX_SIZE 1024
+#include "settings/SettingsObject.h"
 
 IconList::IconList(const QStringList& builtinPaths, const QString& path, QObject* parent) : QAbstractListModel(parent)
 {
@@ -64,7 +65,10 @@ IconList::IconList(const QStringList& builtinPaths, const QString& path, QObject
 
     m_watcher.reset(new QFileSystemWatcher());
     m_isWatching = false;
-    connect(m_watcher.get(), &QFileSystemWatcher::directoryChanged, this, &IconList::directoryChanged);
+    connect(m_watcher.get(), &QFileSystemWatcher::directoryChanged, this, [this] {
+        // NOTE: we don't want the path of the subdir, but of the root dir
+        directoryChanged(APPLICATION->settings()->get("IconsDir").toString());
+    });
     connect(m_watcher.get(), &QFileSystemWatcher::fileChanged, this, &IconList::fileChanged);
 
     directoryChanged(path);
@@ -87,8 +91,7 @@ void IconList::sortIconList()
     reindex();
 }
 
-// Helper function to add directories recursively
-bool IconList::addPathRecursively(const QString& path)
+bool IconList::addPath(const QString& path)
 {
     QDir dir(path);
     if (!dir.exists())
@@ -100,7 +103,7 @@ bool IconList::addPathRecursively(const QString& path)
     // Add all subdirectories
     QFileInfoList entries = dir.entryInfoList(QDir::Dirs | QDir::NoDotAndDotDot);
     for (const QFileInfo& entry : entries) {
-        if (addPathRecursively(entry.absoluteFilePath())) {
+        if (m_watcher->addPath(entry.absoluteFilePath())) {
             watching = true;
         }
     }
@@ -110,15 +113,13 @@ bool IconList::addPathRecursively(const QString& path)
 QStringList IconList::getIconFilePaths() const
 {
     QStringList iconFiles{};
-    QStringList directories{ m_dir.absolutePath() };
-    while (!directories.isEmpty()) {
-        QString first = directories.takeFirst();
-        QDir dir(first);
-        for (QFileInfo& fileInfo : dir.entryInfoList(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot, QDir::Name)) {
-            if (fileInfo.isDir())
-                directories.push_back(fileInfo.absoluteFilePath());
-            else
-                iconFiles.push_back(fileInfo.absoluteFilePath());
+    for (QFileInfo& topFile : m_dir.entryInfoList(QDir::AllDirs | QDir::Files | QDir::NoDotAndDotDot, QDir::Name)) {
+        if (topFile.isDir()) {
+            for (QFileInfo& subFile : QDir(topFile.filePath()).entryInfoList(QDir::Files, QDir::Name)) {
+                iconFiles.push_back(subFile.absoluteFilePath());
+            }
+        } else {
+            iconFiles.push_back(topFile.absoluteFilePath());
         }
     }
     return iconFiles;
@@ -146,8 +147,7 @@ void IconList::directoryChanged(const QString& path)
 {
     QDir newDir(path);
     if (m_dir.absolutePath() != newDir.absolutePath()) {
-        if (!path.startsWith(m_dir.absolutePath()))
-            m_dir.setPath(path);
+        m_dir.setPath(path);
         m_dir.refresh();
         if (m_isWatching)
             stopWatching();
@@ -169,7 +169,7 @@ void IconList::directoryChanged(const QString& path)
     QSet<QString> toAdd = newSet - currentSet;
 
     for (const QString& removedPath : toRemove) {
-        qDebug() << "Removing icon " << removedPath;
+        qDebug() << "Removing icon" << removedPath;
         QFileInfo removedFile(removedPath);
         QString relativePath = m_dir.relativeFilePath(removedFile.absoluteFilePath());
         QString key = QFileInfo(relativePath).completeBaseName();
@@ -191,7 +191,7 @@ void IconList::directoryChanged(const QString& path)
     }
 
     for (const QString& addedPath : toAdd) {
-        qDebug() << "Adding icon " << addedPath;
+        qDebug() << "Adding icon" << addedPath;
 
         QFileInfo addfile(addedPath);
         QString relativePath = m_dir.relativeFilePath(addfile.absoluteFilePath());
@@ -209,7 +209,7 @@ void IconList::directoryChanged(const QString& path)
 
 void IconList::fileChanged(const QString& path)
 {
-    qDebug() << "Checking icon " << path;
+    qDebug() << "Checking icon" << path;
     QFileInfo checkfile(path);
     if (!checkfile.exists())
         return;
@@ -217,7 +217,13 @@ void IconList::fileChanged(const QString& path)
     int idx = getIconIndex(key);
     if (idx == -1)
         return;
-    QIcon icon(path);
+    QIcon icon;
+    // special handling for jpg and jpeg to go through pixmap to keep the size constant
+    if (path.endsWith(".jpg") || path.endsWith(".jpeg")) {
+        icon.addPixmap(QPixmap(path));
+    } else {
+        icon.addFile(path);
+    }
     if (icon.availableSizes().empty())
         return;
 
@@ -226,23 +232,15 @@ void IconList::fileChanged(const QString& path)
     emit iconUpdated(key);
 }
 
-void IconList::SettingChanged(const Setting& setting, const QVariant& value)
-{
-    if (setting.id() != "IconsDir")
-        return;
-
-    directoryChanged(value.toString());
-}
-
 void IconList::startWatching()
 {
     auto abs_path = m_dir.absolutePath();
     FS::ensureFolderPathExists(abs_path);
-    m_isWatching = addPathRecursively(abs_path);
+    m_isWatching = addPath(abs_path);
     if (m_isWatching) {
-        qDebug() << "Started watching " << abs_path;
+        qDebug() << "Started watching" << abs_path;
     } else {
-        qDebug() << "Failed to start watching " << abs_path;
+        qDebug() << "Failed to start watching" << abs_path;
     }
 }
 
@@ -340,8 +338,12 @@ void IconList::installIcon(const QString& file, const QString& name)
     if (!IconUtils::isIconSuffix(fileinfo.suffix()))
         return;
 
-    QString target = FS::PathCombine(getDirectory(), name.isEmpty() ? fileinfo.fileName() : name);
-    QFile::copy(file, target);
+    const auto target = FS::getSafePathInRoot(getDirectory(), name.isEmpty() ? fileinfo.fileName() : name);
+    if (!target.has_value()) {
+        qWarning() << "Installing icon to list -" << target.error();
+        return;
+    }
+    QFile::copy(file, target.value());
 }
 
 bool IconList::iconFileExists(const QString& key) const
@@ -395,7 +397,14 @@ bool IconList::addThemeIcon(const QString& key)
 bool IconList::addIcon(const QString& key, const QString& name, const QString& path, const IconType type)
 {
     // replace the icon even? is the input valid?
-    QIcon icon(path);
+    QIcon icon;
+    // special handling for jpg and jpeg to go through pixmap to keep the size constant
+    if (path.endsWith(".jpg") || path.endsWith(".jpeg")) {
+        icon.addPixmap(QPixmap(path));
+    } else {
+        icon.addFile(path);
+    }
+
     if (icon.isNull())
         return false;
     auto iter = m_nameIndex.find(key);

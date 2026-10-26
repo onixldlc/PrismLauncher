@@ -30,8 +30,8 @@ class VersionList : public BaseVersionList {
    public:
     explicit VersionList(Meta::Version::Ptr m_version, QObject* parent = 0);
 
-    Task::Ptr getLoadTask() override;
-    bool isLoaded() override;
+    Task::Ptr getLoadTask(bool forceReload = false) override;
+    bool isLoaded() const override;
     const BaseVersion::Ptr at(int i) const override;
     int count() const override;
     void sortVersions() override;

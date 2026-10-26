@@ -5,11 +5,15 @@
 #include "ResourcePackModel.h"
 
 #include <QMessageBox>
+#include <utility>
 
 namespace ResourceDownload {
 
-ResourcePackResourceModel::ResourcePackResourceModel(BaseInstance const& base_inst, ResourceAPI* api)
-    : ResourceModel(api), m_base_instance(base_inst)
+ResourcePackResourceModel::ResourcePackResourceModel(ResourceFolderModel* resourceList,
+                                                     const ResourceAPI* api,
+                                                     const QString& debugName,
+                                                     QString metaEntryBase)
+    : ResourceModel(resourceList, api), m_debugName(debugName + " (Model)"), m_metaEntryBase(std::move(metaEntryBase))
 {}
 
 /******** Make data requests ********/
@@ -17,29 +21,33 @@ ResourcePackResourceModel::ResourcePackResourceModel(BaseInstance const& base_in
 ResourceAPI::SearchArgs ResourcePackResourceModel::createSearchArguments()
 {
     auto sort = getCurrentSortingMethodByIndex();
-    return { ModPlatform::ResourceType::ResourcePack, m_next_search_offset, m_search_term, sort };
+    return {
+        .type = ModPlatform::ResourceType::ResourcePack,
+        .offset = m_nextSearchOffset,
+        .search = m_searchTerm,
+        .sorting = sort,
+        .loaders = {},
+        .versions = {},
+        .side = {},
+        .categoryIds = {},
+        .openSource = {},
+    };
 }
 
 ResourceAPI::VersionSearchArgs ResourcePackResourceModel::createVersionsArguments(const QModelIndex& entry)
 {
-    auto& pack = m_packs[entry.row()];
-    return { *pack };
-}
-
-ResourceAPI::ProjectInfoArgs ResourcePackResourceModel::createInfoArguments(const QModelIndex& entry)
-{
-    auto& pack = m_packs[entry.row()];
-    return { *pack };
+    auto pack = m_packs[entry.row()];
+    return { .pack = pack, .mcVersions = {}, .loaders = {}, .resourceType = ModPlatform::ResourceType::ResourcePack };
 }
 
 void ResourcePackResourceModel::searchWithTerm(const QString& term, unsigned int sort)
 {
-    if (m_search_term == term && m_search_term.isNull() == term.isNull() && m_current_sort_index == sort) {
+    if (m_searchTerm == term && m_searchTerm.isNull() == term.isNull() && m_currentSortIndex == sort) {
         return;
     }
 
     setSearchTerm(term);
-    m_current_sort_index = sort;
+    m_currentSortIndex = sort;
 
     refresh();
 }

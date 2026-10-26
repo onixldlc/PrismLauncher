@@ -33,9 +33,9 @@ VersionList::VersionList(Meta::Version::Ptr version, QObject* parent) : BaseVers
         sortVersions();
 }
 
-Task::Ptr VersionList::getLoadTask()
+Task::Ptr VersionList::getLoadTask(bool forceReload)
 {
-    auto task = m_version->loadTask(Net::Mode::Online);
+    auto task = m_version->loadTask(Net::Mode::Online, forceReload);
     connect(task.get(), &Task::finished, this, &VersionList::sortVersions);
     return task;
 }
@@ -45,7 +45,7 @@ const BaseVersion::Ptr VersionList::at(int i) const
     return m_vlist.at(i);
 }
 
-bool VersionList::isLoaded()
+bool VersionList::isLoaded() const
 {
     return m_version->isLoaded();
 }
@@ -118,7 +118,7 @@ void VersionList::sortVersions()
                      [versionStr](Java::MetadataPtr val) { return val->runtimeOS == versionStr; });
         std::sort(m_vlist.begin(), m_vlist.end(), sortJavas);
     } else {
-        qWarning() << "No Java versions found for your operating system." << SysInfo::currentSystem() << " " << SysInfo::useQTForArch();
+        qWarning() << "No Java versions found for your operating system:" << SysInfo::currentSystem() << SysInfo::useQTForArch();
     }
     endResetModel();
 }

@@ -7,10 +7,11 @@ class FlameCheckUpdate : public CheckUpdateTask {
 
    public:
     FlameCheckUpdate(QList<Resource*>& resources,
-                     std::list<Version>& mcVersions,
+                     std::vector<Version>& mcVersions,
                      QList<ModPlatform::ModLoaderType> loadersList,
-                     std::shared_ptr<ResourceFolderModel> resourceModel)
-        : CheckUpdateTask(resources, mcVersions, std::move(loadersList), std::move(resourceModel))
+                     ResourceFolderModel* resourceModel,
+                     std::vector<ModPlatform::IndexedVersionType> releaseTypes = {})
+        : CheckUpdateTask(resources, mcVersions, std::move(loadersList), resourceModel, std::move(releaseTypes))
     {}
 
    public slots:
@@ -19,7 +20,7 @@ class FlameCheckUpdate : public CheckUpdateTask {
    protected slots:
     void executeTask() override;
    private slots:
-    void getLatestVersionCallback(Resource* resource, std::shared_ptr<QByteArray> response);
+    void getLatestVersionCallback(Resource* resource, QByteArray* response);
     void collectBlockedMods();
 
    private:

@@ -24,22 +24,21 @@
 struct JavaInstall : public BaseVersion {
     JavaInstall() {}
     JavaInstall(QString id, QString arch, QString path) : id(id), arch(arch), path(path) {}
-    virtual QString descriptor() override { return id.toString(); }
+    virtual QString descriptor() const override { return id.toString(); }
 
-    virtual QString name() override { return id.toString(); }
+    virtual QString name() const override { return id.toString(); }
 
     virtual QString typeString() const override { return arch; }
 
-    virtual bool operator<(BaseVersion& a) override;
-    virtual bool operator>(BaseVersion& a) override;
-    bool operator<(const JavaInstall& rhs);
-    bool operator==(const JavaInstall& rhs);
-    bool operator>(const JavaInstall& rhs);
+    virtual bool operator<(BaseVersion& a) const override;
+    virtual bool operator>(BaseVersion& a) const override;
+    bool operator<(const JavaInstall& rhs) const;
+    bool operator==(const JavaInstall& rhs) const;
+    bool operator>(const JavaInstall& rhs) const;
 
     JavaVersion id;
     QString arch;
     QString path;
-    bool recommended = false;
     bool is_64bit = false;
 };
 

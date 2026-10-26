@@ -40,6 +40,7 @@
 
 #include <QAbstractListModel>
 #include <QObject>
+#include <QSet>
 #include <QSharedPointer>
 #include <QVariant>
 
@@ -55,7 +56,6 @@ class AccountList : public QAbstractListModel {
     enum VListColumns {
         // TODO: Add icon column.
         ProfileNameColumn = 0,
-        NameColumn,
         TypeColumn,
         StatusColumn,
 
@@ -78,9 +78,9 @@ class AccountList : public QAbstractListModel {
 
     void addAccount(MinecraftAccountPtr account);
     void removeAccount(QModelIndex index);
+    void moveAccount(QModelIndex index, int delta);
     int findAccountByProfileId(const QString& profileId) const;
     MinecraftAccountPtr getAccountByProfileName(const QString& profileName) const;
-    QStringList profileNames() const;
 
     // requesting a refresh pushes it to the front of the queue
     void requestRefresh(QString accountId);
@@ -111,7 +111,6 @@ class AccountList : public QAbstractListModel {
     void endActivity();
 
    private:
-    const char* m_name;
     uint32_t m_activityCount = 0;
    signals:
     void listChanged();
@@ -143,6 +142,7 @@ class AccountList : public QAbstractListModel {
 
    protected:
     QList<QString> m_refreshQueue;
+    QSet<QString> m_explicitRefreshes;
     QTimer* m_refreshTimer;
     QTimer* m_nextTimer;
     shared_qobject_ptr<AuthFlow> m_currentTask;

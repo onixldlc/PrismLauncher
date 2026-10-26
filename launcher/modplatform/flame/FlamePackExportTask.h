@@ -29,7 +29,7 @@ struct FlamePackExportOptions {
     QString version;
     QString author;
     bool optionalFiles;
-    MinecraftInstancePtr instance;
+    MinecraftInstance* instance;
     QString output;
     MMCZip::FilterFileFunction filter;
     int recommendedRAM;
@@ -70,9 +70,7 @@ class FlamePackExportTask : public Task {
     FlamePackExportOptions m_options;
     QDir m_gameRoot;
 
-    FlameAPI api;
-
-    QFileInfoList files;
+    QFileInfoList m_files;
     QMap<QString, HashInfo> pendingHashes{};
     QMap<QString, ResolvedFile> resolvedFiles{};
     Task::Ptr task;

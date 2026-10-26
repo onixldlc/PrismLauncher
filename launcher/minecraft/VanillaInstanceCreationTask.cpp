@@ -7,32 +7,31 @@
 #include "minecraft/PackProfile.h"
 #include "settings/INISettingsObject.h"
 
-VanillaCreationTask::VanillaCreationTask(BaseVersion::Ptr version, QString loader, BaseVersion::Ptr loader_version)
-    : InstanceCreationTask()
-    , m_version(std::move(version))
-    , m_using_loader(true)
-    , m_loader(std::move(loader))
-    , m_loader_version(std::move(loader_version))
+VanillaCreationTask::VanillaCreationTask(BaseVersion::Ptr version, QString loader, BaseVersion::Ptr loaderVersion)
+    : m_version(std::move(version)), m_usingLoader(true), m_loader(std::move(loader)), m_loaderVersion(std::move(loaderVersion))
 {}
 
-bool VanillaCreationTask::createInstance()
+void VanillaCreationTask::executeTask()
 {
     setStatus(tr("Creating instance from version %1").arg(m_version->name()));
 
-    auto instance_settings = std::make_shared<INISettingsObject>(FS::PathCombine(m_stagingPath, "instance.cfg"));
-    instance_settings->suspendSave();
+    m_instance = std::make_unique<MinecraftInstance>(
+        m_globalSettings, std::make_unique<INISettingsObject>(FS::PathCombine(m_stagingPath, "instance.cfg")), m_stagingPath);
     {
-        MinecraftInstance inst(m_globalSettings, instance_settings, m_stagingPath);
-        auto components = inst.getPackProfile();
+        const SettingsObject::Lock lock(m_instance->settings());
+
+        auto* components = m_instance->getPackProfile();
         components->buildingFromScratch();
         components->setComponentVersion("net.minecraft", m_version->descriptor(), true);
-        if (m_using_loader)
-            components->setComponentVersion(m_loader, m_loader_version->descriptor());
+        if (m_usingLoader) {
+            components->setComponentVersion(m_loader, m_loaderVersion->descriptor());
+        }
 
-        inst.setName(name());
-        inst.setIconKey(m_instIcon);
+        m_instance->setName(name());
+        m_instance->setIconKey(m_instIcon);
+
+        components->saveNow();
     }
-    instance_settings->resumeSave();
 
-    return true;
+    downloadFiles(m_instance.get());
 }

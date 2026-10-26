@@ -38,7 +38,6 @@
 #include <QTimer>
 #include <QWidget>
 
-#include <Application.h>
 #include "TechnicData.h"
 #include "net/NetJob.h"
 #include "ui/pages/modplatform/ModpackProviderBasePage.h"
@@ -58,23 +57,21 @@ class TechnicPage : public QWidget, public ModpackProviderBasePage {
     Q_OBJECT
 
    public:
-    explicit TechnicPage(NewInstanceDialog* dialog, QWidget* parent = 0);
-    virtual ~TechnicPage();
-    virtual QString displayName() const override { return "Technic"; }
-    virtual QIcon icon() const override { return APPLICATION->getThemedIcon("technic"); }
-    virtual QString id() const override { return "technic"; }
-    virtual QString helpPage() const override { return "Technic-platform"; }
-    virtual bool shouldDisplay() const override;
+    explicit TechnicPage(NewInstanceDialog* dialog, QWidget* parent = nullptr);
+    ~TechnicPage() override;
+    QString displayName() const override { return "Technic"; }
+    QIcon icon() const override { return QIcon::fromTheme("technic"); }
+    QString id() const override { return "technic"; }
+    QString helpPage() const override { return "Technic-platform"; }
+    bool shouldDisplay() const override;
     void retranslate() override;
 
     void openedImpl() override;
 
-    bool eventFilter(QObject* watched, QEvent* event) override;
-
     /** Programatically set the term in the search bar. */
-    virtual void setSearchTerm(QString) override;
+    void setSearchTerm(QString /*unused*/) override;
     /** Get the current term in the search bar. */
-    virtual QString getSerachTerm() const override;
+    QString getSerachTerm() const override;
 
    private:
     void suggestCurrent();
@@ -84,8 +81,8 @@ class TechnicPage : public QWidget, public ModpackProviderBasePage {
    private slots:
     void triggerSearch();
     void onSelectionChanged(QModelIndex first, QModelIndex second);
-    void onSolderLoaded();
-    void onVersionSelectionChanged(QString data);
+    void onSolderLoaded(QByteArray* responsePtr);
+    void onVersionSelectionChanged(const QString& version);
 
    private:
     Ui::TechnicPage* ui = nullptr;
@@ -96,7 +93,6 @@ class TechnicPage : public QWidget, public ModpackProviderBasePage {
     QString selectedVersion;
 
     NetJob::Ptr jobPtr;
-    std::shared_ptr<QByteArray> response = std::make_shared<QByteArray>();
 
     ProgressWidget m_fetch_progress;
 

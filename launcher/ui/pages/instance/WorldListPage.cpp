@@ -36,48 +36,59 @@
  */
 
 #include "WorldListPage.h"
+#include "AssertHelpers.h"
+#include "Commandline.h"
 #include "minecraft/WorldList.h"
+#include "settings/SettingsObject.h"
+#include "tasks/ConcurrentTask.h"
 #include "ui/dialogs/CustomMessageBox.h"
+#include "ui/dialogs/ProgressDialog.h"
 #include "ui_WorldListPage.h"
 
 #include <ui/widgets/PageContainer.h>
 #include <QClipboard>
+#include <QCursor>
 #include <QDialogButtonBox>
 #include <QEvent>
 #include <QInputDialog>
 #include <QKeyEvent>
 #include <QMenu>
 #include <QMessageBox>
+#include <QProcess>
+#include <QPushButton>
 #include <QSortFilterProxyModel>
 #include <QTreeView>
 #include <Qt>
-#include <QPushButton>
+#include <algorithm>
+#include <memory>
 
 #include "FileSystem.h"
-#include "tools/MCEditTool.h"
 
 #include "DesktopServices.h"
+#include "Json.h"
 #include "ui/GuiUtil.h"
 
 #include "Application.h"
 #include "DataPackPage.h"
+#include "settings/Setting.h"
 
+namespace {
 class WorldListProxyModel : public QSortFilterProxyModel {
     Q_OBJECT
 
    public:
-    WorldListProxyModel(QObject* parent) : QSortFilterProxyModel(parent) {}
+    explicit WorldListProxyModel(QObject* parent) : QSortFilterProxyModel(parent) {}
 
-    virtual QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const
+    QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override
     {
         QModelIndex sourceIndex = mapToSource(index);
 
         if (index.column() == 0 && role == Qt::DecorationRole) {
-            WorldList* worlds = qobject_cast<WorldList*>(sourceModel());
+            auto* worlds = qobject_cast<WorldList*>(sourceModel());
             auto iconFile = worlds->data(sourceIndex, WorldList::IconFileRole).toString();
             if (iconFile.isNull()) {
                 // NOTE: Minecraft uses the same placeholder for servers AND worlds
-                return APPLICATION->getThemedIcon("unknown_server");
+                return QIcon::fromTheme("unknown_server");
             }
             return QIcon(iconFile);
         }
@@ -85,73 +96,83 @@ class WorldListProxyModel : public QSortFilterProxyModel {
         return sourceIndex.data(role);
     }
 };
+}  // namespace
 
-WorldListPage::WorldListPage(MinecraftInstancePtr inst, std::shared_ptr<WorldList> worlds, QWidget* parent)
-    : QMainWindow(parent), m_inst(inst), ui(new Ui::WorldListPage), m_worlds(worlds)
+WorldListPage::WorldListPage(MinecraftInstance* inst, WorldList* worlds, QWidget* parent)
+    : QMainWindow(parent), m_inst(inst), m_ui(new Ui::WorldListPage), m_worlds(worlds), m_worldToolsMenu(new QMenu(this))
 {
-    ui->setupUi(this);
+    m_ui->setupUi(this);
 
-    ui->toolBar->insertSpacer(ui->actionRefresh);
+    m_ui->toolBar->insertSpacer(m_ui->actionRefresh);
 
-    WorldListProxyModel* proxy = new WorldListProxyModel(this);
+    auto* proxy = new WorldListProxyModel(this);
     proxy->setSortCaseSensitivity(Qt::CaseInsensitive);
-    proxy->setSourceModel(m_worlds.get());
+    proxy->setSourceModel(m_worlds);
     proxy->setSortRole(Qt::UserRole);
-    ui->worldTreeView->setSortingEnabled(true);
-    ui->worldTreeView->setModel(proxy);
-    ui->worldTreeView->installEventFilter(this);
-    ui->worldTreeView->setContextMenuPolicy(Qt::CustomContextMenu);
-    ui->worldTreeView->setIconSize(QSize(64, 64));
-    connect(ui->worldTreeView, &QTreeView::customContextMenuRequested, this, &WorldListPage::ShowContextMenu);
+    m_ui->worldTreeView->setSortingEnabled(true);
+    m_ui->worldTreeView->setModel(proxy);
+    m_ui->worldTreeView->installEventFilter(this);
+    m_ui->worldTreeView->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_ui->worldTreeView->setIconSize(QSize(64, 64));
+    connect(m_ui->worldTreeView, &QTreeView::customContextMenuRequested, this, &WorldListPage::ShowContextMenu);
+    connect(m_ui->worldTreeView, &QAbstractItemView::activated, this, [this] {
+        if (m_ui->actionJoin->isEnabled()) {
+            on_actionJoin_triggered();
+        }
+    });
 
-    auto head = ui->worldTreeView->header();
+    auto* head = m_ui->worldTreeView->header();
     head->setSectionResizeMode(0, QHeaderView::Stretch);
     head->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     head->setSectionResizeMode(4, QHeaderView::ResizeToContents);
 
-    connect(ui->worldTreeView->selectionModel(), &QItemSelectionModel::currentChanged, this, &WorldListPage::worldChanged);
-    worldChanged(QModelIndex(), QModelIndex());
+    connect(m_ui->worldTreeView->selectionModel(), &QItemSelectionModel::selectionChanged, this, &WorldListPage::worldChanged);
+    connect(proxy, &QAbstractItemModel::rowsRemoved, this, &WorldListPage::worldChanged);
+    connect(proxy, &QAbstractItemModel::modelReset, this, &WorldListPage::worldChanged);
+
+    m_ui->actionWorldTools->setMenu(m_worldToolsMenu);
+    connect(m_ui->actionWorldTools, &QAction::triggered, this, [this] {
+        if (getSelectedWorld().isValid() && !m_worldToolsMenu->isEmpty()) {
+            m_worldToolsMenu->popup(QCursor::pos());
+        }
+    });
+    connect(APPLICATION->settings()->getSetting("WorldTools").get(), &Setting::SettingChanged, this, [this] { populateWorldToolsMenu(); });
+
+    worldChanged();
 }
 
 void WorldListPage::openedImpl()
 {
     m_worlds->startWatching();
 
-    auto mInst = std::dynamic_pointer_cast<MinecraftInstance>(m_inst);
-    if (!mInst || !mInst->traits().contains("feature:is_quick_play_singleplayer")) {
-        ui->toolBar->removeAction(ui->actionJoin);
+    if ((m_inst == nullptr) || !m_inst->traits().contains("feature:is_quick_play_singleplayer")) {
+        m_ui->toolBar->removeAction(m_ui->actionJoin);
     }
 
-    auto const setting_name = QString("WideBarVisibility_%1").arg(id());
-    m_wide_bar_setting = APPLICATION->settings()->getOrRegisterSetting(setting_name);
-
-    ui->toolBar->setVisibilityState(QByteArray::fromBase64(m_wide_bar_setting->get().toString().toUtf8()));
+    populateWorldToolsMenu();
 }
 
 void WorldListPage::closedImpl()
 {
     m_worlds->stopWatching();
-
-    m_wide_bar_setting->set(QString::fromUtf8(ui->toolBar->getVisibilityState().toBase64()));
 }
 
 WorldListPage::~WorldListPage()
 {
     m_worlds->stopWatching();
-    delete ui;
+    delete m_ui;
 }
 
 void WorldListPage::ShowContextMenu(const QPoint& pos)
 {
-    auto menu = ui->toolBar->createContextMenu(this, tr("Context menu"));
-    menu->exec(ui->worldTreeView->mapToGlobal(pos));
+    auto* menu = m_ui->toolBar->createContextMenu(this, tr("Context menu"));
+    menu->exec(m_ui->worldTreeView->mapToGlobal(pos));
     delete menu;
 }
-
 QMenu* WorldListPage::createPopupMenu()
 {
     QMenu* filteredMenu = QMainWindow::createPopupMenu();
-    filteredMenu->removeAction(ui->toolBar->toggleViewAction());
+    filteredMenu->removeAction(m_ui->toolBar->toggleViewAction());
     return filteredMenu;
 }
 
@@ -162,16 +183,16 @@ bool WorldListPage::shouldDisplay() const
 
 void WorldListPage::retranslate()
 {
-    ui->retranslateUi(this);
+    m_ui->retranslateUi(this);
 }
 
-bool WorldListPage::worldListFilter(QKeyEvent* keyEvent)
+bool WorldListPage::worldListFilter(QKeyEvent* ev)
 {
-    if (keyEvent->key() == Qt::Key_Delete) {
+    if (ev->key() == Qt::Key_Delete) {
         on_actionRemove_triggered();
         return true;
     }
-    return QWidget::eventFilter(ui->worldTreeView, keyEvent);
+    return QWidget::eventFilter(m_ui->worldTreeView, ev);
 }
 
 bool WorldListPage::eventFilter(QObject* obj, QEvent* ev)
@@ -179,32 +200,55 @@ bool WorldListPage::eventFilter(QObject* obj, QEvent* ev)
     if (ev->type() != QEvent::KeyPress) {
         return QWidget::eventFilter(obj, ev);
     }
-    QKeyEvent* keyEvent = static_cast<QKeyEvent*>(ev);
-    if (obj == ui->worldTreeView)
+    auto* keyEvent = static_cast<QKeyEvent*>(ev);
+    if (obj == m_ui->worldTreeView) {
         return worldListFilter(keyEvent);
+    }
     return QWidget::eventFilter(obj, ev);
 }
 
 void WorldListPage::on_actionRemove_triggered()
 {
-    auto proxiedIndex = getSelectedWorld();
-
-    if (!proxiedIndex.isValid())
+    const auto selected = getSelectedWorlds();
+    if (selected.isEmpty()) {
         return;
+    }
 
-    auto result = CustomMessageBox::selectable(this, tr("Confirm Deletion"),
-                                               tr("You are about to delete \"%1\".\n"
-                                                  "The world may be gone forever (A LONG TIME).\n\n"
-                                                  "Are you sure?")
-                                                   .arg(m_worlds->allWorlds().at(proxiedIndex.row()).name()),
-                                               QMessageBox::Warning, QMessageBox::Yes | QMessageBox::No, QMessageBox::No)
+    QString text;
+    if (selected.size() == 1) {
+        const auto& world = m_worlds->allWorlds().at(selected.first().row());
+        text = tr("You are about to delete \"%1\".\n"
+                  "The world may be gone forever (A LONG TIME).\n\n"
+                  "Are you sure?")
+                   .arg(world.name());
+    } else {
+        text =
+            tr("You are about to delete %n world(s).\n"
+               "These worlds may be gone forever (A LONG TIME).\n\n"
+               "Are you sure?",
+               nullptr, static_cast<int>(selected.size()));
+    }
+
+    auto result = CustomMessageBox::selectable(this, tr("Confirm Deletion"), text, QMessageBox::Warning, QMessageBox::Yes | QMessageBox::No,
+                                               QMessageBox::No)
                       ->exec();
 
     if (result != QMessageBox::Yes) {
         return;
     }
+
+    auto task = std::make_unique<ConcurrentTask>(tr("Deleting worlds"));
+    for (const auto& index : selected) {
+        if (auto deleteTask = m_worlds->createDeleteWorldTask(index.row())) {
+            task->addTask(Task::Ptr(deleteTask.release()));
+        }
+    }
+
     m_worlds->stopWatching();
-    m_worlds->deleteWorld(proxiedIndex.row());
+
+    ProgressDialog dialog(this);
+    dialog.execWithTask(std::move(task));
+
     m_worlds->startWatching();
 }
 
@@ -221,13 +265,14 @@ void WorldListPage::on_actionData_Packs_triggered()
         return;
     }
 
-    if (!worldSafetyNagQuestion(tr("Manage Data Packs")))
+    if (!worldSafetyNagQuestion(tr("Manage Data Packs"))) {
         return;
+    }
 
     const QString fullPath = m_worlds->data(index, WorldList::FolderRole).toString();
     const QString folder = FS::PathCombine(fullPath, "datapacks");
 
-    auto dialog = new QDialog(this);
+    auto* dialog = new QDialog(this);
     dialog->setWindowTitle(tr("Data packs for %1").arg(m_worlds->data(index, WorldList::NameRole).toString()));
     dialog->setWindowModality(Qt::WindowModal);
 
@@ -237,53 +282,59 @@ void WorldListPage::on_actionData_Packs_triggered()
 
     GenericPageProvider provider(dialog->windowTitle());
 
-    provider.addPageCreator([this, folder] {
-        bool isIndexed = !APPLICATION->settings()->get("ModMetadataDisabled").toBool();
-        auto model = std::make_shared<DataPackFolderModel>(folder, m_inst.get(), isIndexed, true);
-        return new DataPackPage(m_inst.get(), std::move(model));
-    });
+    bool isIndexed = !APPLICATION->settings()->get("ModMetadataDisabled").toBool();
+    m_datapackModel = std::make_unique<DataPackFolderModel>(folder, m_inst, isIndexed, true);
 
-    auto layout = new QVBoxLayout(dialog);
+    provider.addPageCreator([this] { return new DataPackPage(m_inst, m_datapackModel.get(), this); });
 
-    auto focusStealer = new QPushButton(dialog);
+    auto* layout = new QVBoxLayout(dialog);
+
+    auto* focusStealer = new QPushButton(dialog);
     layout->addWidget(focusStealer);
     focusStealer->setDefault(true);
     focusStealer->hide();
 
-    auto pageContainer = new PageContainer(&provider, {}, dialog);
+    auto* pageContainer = new PageContainer(&provider, {}, dialog);
     pageContainer->hidePageList();
     layout->addWidget(pageContainer);
 
-    auto buttonBox = new QDialogButtonBox(QDialogButtonBox::Close | QDialogButtonBox::Help);
+    auto* buttonBox = new QDialogButtonBox(QDialogButtonBox::Close | QDialogButtonBox::Help);
     connect(buttonBox, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
     connect(buttonBox, &QDialogButtonBox::helpRequested, pageContainer, &PageContainer::help);
     layout->addWidget(buttonBox);
 
     dialog->setLayout(layout);
 
-    dialog->exec();
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
 
-    APPLICATION->settings()->set("DataPackDownloadGeometry", dialog->saveGeometry().toBase64());
+    connect(dialog, &QDialog::finished, this,
+            [dialog] { APPLICATION->settings()->set("DataPackDownloadGeometry", dialog->saveGeometry().toBase64()); });
+
+    dialog->open();
 }
 
 void WorldListPage::on_actionReset_Icon_triggered()
 {
-    auto proxiedIndex = getSelectedWorld();
-
-    if (!proxiedIndex.isValid())
-        return;
-
-    if (m_worlds->resetIcon(proxiedIndex.row())) {
-        ui->actionReset_Icon->setEnabled(false);
+    for (const auto& index : getSelectedWorlds()) {
+        m_worlds->resetIcon(index.row());
     }
+    worldChanged();
 }
 
 QModelIndex WorldListPage::getSelectedWorld()
 {
-    auto index = ui->worldTreeView->selectionModel()->currentIndex();
+    const auto selected = getSelectedWorlds();
+    return selected.size() == 1 ? selected.first() : QModelIndex();
+}
 
-    auto proxy = (QSortFilterProxyModel*)ui->worldTreeView->model();
-    return proxy->mapToSource(index);
+QModelIndexList WorldListPage::getSelectedWorlds()
+{
+    auto* proxy = dynamic_cast<QSortFilterProxyModel*>(m_ui->worldTreeView->model());
+    QModelIndexList result;
+    for (const auto& index : m_ui->worldTreeView->selectionModel()->selectedRows()) {
+        result.append(proxy->mapToSource(index));
+    }
+    return result;
 }
 
 void WorldListPage::on_actionCopy_Seed_triggered()
@@ -297,112 +348,106 @@ void WorldListPage::on_actionCopy_Seed_triggered()
     APPLICATION->clipboard()->setText(QString::number(seed));
 }
 
-void WorldListPage::on_actionMCEdit_triggered()
+void WorldListPage::populateWorldToolsMenu()
 {
-    if (m_mceditStarting)
-        return;
+    m_worldToolsMenu->clear();
+    const QVariantMap tools = Json::toMap(APPLICATION->settings()->get("WorldTools").toString());
 
-    auto mcedit = APPLICATION->mcedit();
+    if (tools.isEmpty()) {
+        auto* noToolsAction = m_worldToolsMenu->addAction(tr("No Tools Added"));
+        noToolsAction->setEnabled(false);
+        m_worldToolsMenu->addSeparator();
+        auto* settingsAction = m_worldToolsMenu->addAction(tr("Open Settings"));
+        connect(settingsAction, &QAction::triggered, this, [] { APPLICATION->ShowGlobalSettings(nullptr, "external-tools"); });
+    } else {
+        for (auto it = tools.constBegin(); it != tools.constEnd(); ++it) {
+            if (ASSERT_NEVER(it.key().isEmpty())) {
+                continue;
+            }
+            auto* action = m_worldToolsMenu->addAction(it.key());
+            connect(action, &QAction::triggered, this,
+                    [this, name = it.key(), command = it.value().toString()] { launchWorldTool(name, command); });
+        }
+    }
 
-    const QString mceditPath = mcedit->path();
+    m_ui->actionWorldTools->setEnabled(getSelectedWorld().isValid());
+}
 
-    QModelIndex index = getSelectedWorld();
-
+void WorldListPage::launchWorldTool(const QString& name, const QString& command)
+{
+    const QModelIndex index = getSelectedWorld();
     if (!index.isValid()) {
         return;
     }
 
-    if (!worldSafetyNagQuestion(tr("Open World in MCEdit")))
+    if (!worldSafetyNagQuestion(name)) {
         return;
+    }
 
-    auto fullPath = m_worlds->data(index, WorldList::FolderRole).toString();
+    const auto folderPath = m_worlds->data(index, WorldList::FolderRole).toString();
+    QProcessEnvironment vars;
+    vars.insert("WORLD_PATH", folderPath);
 
-    auto program = mcedit->getProgramPath();
-    if (program.size()) {
-#ifdef Q_OS_WIN32
-        if (!QProcess::startDetached(program, { fullPath }, mceditPath)) {
-            mceditError();
-        }
-#else
-        m_mceditProcess.reset(new LoggedProcess());
-        m_mceditProcess->setDetachable(true);
-        connect(m_mceditProcess.get(), &LoggedProcess::stateChanged, this, &WorldListPage::mceditState);
-        m_mceditProcess->start(program, { fullPath });
-        m_mceditProcess->setWorkingDirectory(mceditPath);
-        m_mceditStarting = true;
-#endif
-    } else {
-        QMessageBox::warning(this->parentWidget(), tr("No MCEdit found or set up!"),
-                             tr("You do not have MCEdit set up or it was moved.\nYou can set it up in the global settings."));
+    auto args = Commandline::process(command, vars);
+    if (args.isEmpty()) {
+        QMessageBox::warning(this->parentWidget(), tr("Invalid command"), tr("The tool command is empty."));
+        return;
+    }
+
+    const auto program = args.takeFirst();
+    auto* process = new QProcess(this);
+    process->setWorkingDirectory(folderPath);
+    process->start(program, args);
+    if (!process->waitForStarted()) {
+        QMessageBox::warning(this->parentWidget(), tr("Tool failed to start!"),
+                             tr("The tool could not be started.\nError: %1").arg(process->errorString()));
+        process->deleteLater();
     }
 }
 
-void WorldListPage::mceditError()
-{
-    QMessageBox::warning(this->parentWidget(), tr("MCEdit failed to start!"),
-                         tr("MCEdit failed to start.\nIt may be necessary to reinstall it."));
-}
-
-void WorldListPage::mceditState(LoggedProcess::State state)
-{
-    bool failed = false;
-    switch (state) {
-        case LoggedProcess::NotRunning:
-        case LoggedProcess::Starting:
-            return;
-        case LoggedProcess::FailedToStart:
-        case LoggedProcess::Crashed:
-        case LoggedProcess::Aborted: {
-            failed = true;
-        }
-        /* fallthrough */
-        case LoggedProcess::Running:
-        case LoggedProcess::Finished: {
-            m_mceditStarting = false;
-            break;
-        }
-    }
-    if (failed) {
-        mceditError();
-    }
-}
-
-void WorldListPage::worldChanged([[maybe_unused]] const QModelIndex& current, [[maybe_unused]] const QModelIndex& previous)
+void WorldListPage::worldChanged()
 {
     QModelIndex index = getSelectedWorld();
     bool enable = index.isValid();
-    ui->actionCopy_Seed->setEnabled(enable);
-    ui->actionMCEdit->setEnabled(enable);
-    ui->actionRemove->setEnabled(enable);
-    ui->actionCopy->setEnabled(enable);
-    ui->actionRename->setEnabled(enable);
-    ui->actionData_Packs->setEnabled(enable);
-    bool hasIcon = !index.data(WorldList::IconFileRole).isNull();
-    ui->actionReset_Icon->setEnabled(enable && hasIcon);
+    m_ui->actionCopy_Seed->setEnabled(enable);
+    m_ui->actionRemove->setEnabled(m_ui->worldTreeView->selectionModel()->hasSelection());
+    m_ui->actionCopy->setEnabled(enable);
+    m_ui->actionRename->setEnabled(enable);
+    m_ui->actionData_Packs->setEnabled(enable);
+    m_ui->actionWorldTools->setEnabled(enable);
+    const auto selected = getSelectedWorlds();
+    const bool anyHasIcon = std::ranges::any_of(selected, [](const auto& world) { return !world.data(WorldList::IconFileRole).isNull(); });
+    m_ui->actionReset_Icon->setEnabled(anyHasIcon);
 
-    auto mInst = std::dynamic_pointer_cast<MinecraftInstance>(m_inst);
-    auto supportsJoin = mInst && mInst->traits().contains("feature:is_quick_play_singleplayer");
-    ui->actionJoin->setEnabled(enable && supportsJoin);
+    auto supportsJoin = (m_inst != nullptr) && m_inst->traits().contains("feature:is_quick_play_singleplayer");
+    m_ui->actionJoin->setEnabled(enable && supportsJoin);
 
     if (!supportsJoin) {
-        ui->toolBar->removeAction(ui->actionJoin);
+        m_ui->toolBar->removeAction(m_ui->actionJoin);
     }
 }
 
 void WorldListPage::on_actionAdd_triggered()
 {
-    auto list = GuiUtil::BrowseForFiles(displayName(), tr("Select a Minecraft world zip"), tr("Minecraft World Zip File") + " (*.zip)",
+    auto list = GuiUtil::browseForFiles(displayName(), tr("Select a Minecraft world zip"), tr("Minecraft World Zip File") + " (*.zip)",
                                         QString(), this->parentWidget());
-    if (!list.empty()) {
-        m_worlds->stopWatching();
-        for (auto filename : list) {
-            m_worlds->installWorld(QFileInfo(filename));
-        }
-        m_worlds->startWatching();
+    if (list.empty()) {
+        return;
     }
+
+    m_worlds->stopWatching();
+    for (const auto& filename : list) {
+        auto task = m_worlds->createInstallWorldTask(QFileInfo(filename));
+        if (!task) {
+            continue;
+        }
+        ProgressDialog dialog(this);
+        dialog.execWithTask(std::move(task));
+    }
+    m_worlds->startWatching();
 }
 
-bool WorldListPage::isWorldSafe(QModelIndex)
+bool WorldListPage::isWorldSafe(QModelIndex /*unused*/)
 {
     return !m_inst->isRunning();
 }
@@ -426,18 +471,31 @@ void WorldListPage::on_actionCopy_triggered()
         return;
     }
 
-    if (!worldSafetyNagQuestion(tr("Copy World")))
+    if (!worldSafetyNagQuestion(tr("Copy World"))) {
         return;
+    }
 
-    auto worldVariant = m_worlds->data(index, WorldList::ObjectRole);
-    auto world = (World*)worldVariant.value<void*>();
+    const auto world = m_worlds->allWorlds().at(index.row());
+
     bool ok = false;
     QString name =
-        QInputDialog::getText(this, tr("World name"), tr("Enter a new name for the copy."), QLineEdit::Normal, world->name(), &ok);
+        QInputDialog::getText(this, tr("World name"), tr("Enter a new name for the copy."), QLineEdit::Normal, world.name(), &ok);
 
-    if (ok && name.length() > 0) {
-        world->install(m_worlds->dir().absolutePath(), name);
+    if (!ok || name.isEmpty()) {
+        return;
     }
+
+    auto task = m_worlds->createCopyWorldTask(index.row(), name);
+    if (!task) {
+        return;
+    }
+
+    m_worlds->stopWatching();
+
+    ProgressDialog dialog(this);
+    dialog.execWithTask(std::move(task));
+
+    m_worlds->startWatching();
 }
 
 void WorldListPage::on_actionRename_triggered()
@@ -447,11 +505,12 @@ void WorldListPage::on_actionRename_triggered()
         return;
     }
 
-    if (!worldSafetyNagQuestion(tr("Rename World")))
+    if (!worldSafetyNagQuestion(tr("Rename World"))) {
         return;
+    }
 
     auto worldVariant = m_worlds->data(index, WorldList::ObjectRole);
-    auto world = (World*)worldVariant.value<void*>();
+    auto* world = static_cast<World*>(worldVariant.value<void*>());
 
     bool ok = false;
     QString name = QInputDialog::getText(this, tr("World name"), tr("Enter a new world name."), QLineEdit::Normal, world->name(), &ok);
@@ -473,8 +532,8 @@ void WorldListPage::on_actionJoin_triggered()
         return;
     }
     auto worldVariant = m_worlds->data(index, WorldList::ObjectRole);
-    auto world = (World*)worldVariant.value<void*>();
-    APPLICATION->launch(m_inst, true, false, std::make_shared<MinecraftTarget>(MinecraftTarget::parse(world->folderName(), true)));
+    auto* world = static_cast<World*>(worldVariant.value<void*>());
+    APPLICATION->launch(m_inst, LaunchMode::Normal, std::make_shared<MinecraftTarget>(MinecraftTarget::parse(world->folderName(), true)));
 }
 
 #include "WorldListPage.moc"

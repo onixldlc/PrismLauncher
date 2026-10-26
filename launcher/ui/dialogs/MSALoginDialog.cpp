@@ -35,6 +35,8 @@
 
 #include "MSALoginDialog.h"
 #include "Application.h"
+#include "Handle.h"
+#include "settings/SettingsObject.h"
 
 #include "ui_MSALoginDialog.h"
 
@@ -50,7 +52,22 @@
 #include <QUrl>
 #include <QtWidgets/QPushButton>
 
-#include "qrcodegen.hpp"
+#include "qrencode.h"
+
+namespace {
+QString formatError(const QString& reason)
+{
+    QString formatted;
+    for (const auto& line : reason.split('\n')) {
+        if (!line.isEmpty()) {
+            formatted += "<font color='red'>" + line + "</font><br />";
+        } else {
+            formatted += "<br />";
+        }
+    }
+    return formatted;
+}
+}  // namespace
 
 MSALoginDialog::MSALoginDialog(QWidget* parent) : QDialog(parent), ui(new Ui::MSALoginDialog)
 {
@@ -80,8 +97,8 @@ int MSALoginDialog::exec()
 {
     // Setup the login task and start it
     m_account = MinecraftAccount::createBlankMSA();
-    m_authflow_task = m_account->login(false);
-    connect(m_authflow_task.get(), &Task::failed, this, &MSALoginDialog::onTaskFailed);
+    m_authflow_task.reset(new AuthFlow(m_account->accountData(), AuthFlow::Action::Login));
+    connect(m_authflow_task.get(), &Task::failed, this, &MSALoginDialog::onAuthFlowTaskFailed);
     connect(m_authflow_task.get(), &Task::succeeded, this, &QDialog::accept);
     connect(m_authflow_task.get(), &Task::aborted, this, &MSALoginDialog::reject);
     connect(m_authflow_task.get(), &Task::status, this, &MSALoginDialog::onAuthFlowStatus);
@@ -90,7 +107,7 @@ int MSALoginDialog::exec()
     connect(ui->buttonBox->button(QDialogButtonBox::Cancel), &QPushButton::clicked, m_authflow_task.get(), &Task::abort);
 
     m_devicecode_task.reset(new AuthFlow(m_account->accountData(), AuthFlow::Action::DeviceCode));
-    connect(m_devicecode_task.get(), &Task::failed, this, &MSALoginDialog::onTaskFailed);
+    connect(m_devicecode_task.get(), &Task::failed, this, &MSALoginDialog::onDeviceCodeTaskFailed);
     connect(m_devicecode_task.get(), &Task::succeeded, this, &QDialog::accept);
     connect(m_devicecode_task.get(), &Task::aborted, this, &MSALoginDialog::reject);
     connect(m_devicecode_task.get(), &Task::status, this, &MSALoginDialog::onDeviceFlowStatus);
@@ -108,32 +125,34 @@ MSALoginDialog::~MSALoginDialog()
     delete ui;
 }
 
-void MSALoginDialog::onTaskFailed(QString reason)
+void MSALoginDialog::onAuthFlowTaskFailed(QString reason)
 {
     // Set message
     m_authflow_task->disconnect();
+    ui->stackedWidget2->setCurrentIndex(0);
+    ui->status2->setText(formatError(reason));
+    ui->loadingLabel2->setText(m_authflow_task->getStatus());
+    disconnect(ui->buttonBox->button(QDialogButtonBox::Cancel), &QPushButton::clicked, m_authflow_task.get(), &Task::abort);
+    if (m_devicecode_task->getState() == Task::State::Failed) {
+        disconnect(ui->buttonBox->button(QDialogButtonBox::Cancel), &QPushButton::clicked, m_devicecode_task.get(), &Task::abort);
+        connect(ui->buttonBox->button(QDialogButtonBox::Cancel), &QPushButton::clicked, this, &MSALoginDialog::reject,
+                Qt::UniqueConnection);
+    }
+}
+
+void MSALoginDialog::onDeviceCodeTaskFailed(QString reason)
+{
+    // Set message
     m_devicecode_task->disconnect();
     ui->stackedWidget->setCurrentIndex(0);
-    auto lines = reason.split('\n');
-    QString processed;
-    for (auto line : lines) {
-        if (line.size()) {
-            processed += "<font color='red'>" + line + "</font><br />";
-        } else {
-            processed += "<br />";
-        }
-    }
-    ui->status->setText(processed);
-    auto task = m_authflow_task;
-    if (task->failReason().isEmpty()) {
-        task = m_devicecode_task;
-    }
-    if (task) {
-        ui->loadingLabel->setText(task->getStatus());
-    }
-    disconnect(ui->buttonBox->button(QDialogButtonBox::Cancel), &QPushButton::clicked, m_authflow_task.get(), &Task::abort);
+    ui->status->setText(formatError(reason));
+    ui->loadingLabel->setText(m_devicecode_task->getStatus());
     disconnect(ui->buttonBox->button(QDialogButtonBox::Cancel), &QPushButton::clicked, m_devicecode_task.get(), &Task::abort);
-    connect(ui->buttonBox->button(QDialogButtonBox::Cancel), &QPushButton::clicked, this, &MSALoginDialog::reject);
+    if (m_authflow_task->getState() == Task::State::Failed) {
+        disconnect(ui->buttonBox->button(QDialogButtonBox::Cancel), &QPushButton::clicked, m_authflow_task.get(), &Task::abort);
+        connect(ui->buttonBox->button(QDialogButtonBox::Cancel), &QPushButton::clicked, this, &MSALoginDialog::reject,
+                Qt::UniqueConnection);
+    }
 }
 
 void MSALoginDialog::authorizeWithBrowser(const QUrl& url)
@@ -146,27 +165,33 @@ void MSALoginDialog::authorizeWithBrowser(const QUrl& url)
     m_url = url;
 }
 
-// https://stackoverflow.com/questions/21400254/how-to-draw-a-qr-code-with-qt-in-native-c-c
-void paintQR(QPainter& painter, const QSize sz, const QString& data, QColor fg)
+void paintQR(QPainter& painter, const QSize canvasSize, const QString& data, QColor fg)
 {
-    // NOTE: At this point you will use the API to get the encoding and format you want, instead of my hardcoded stuff:
-    qrcodegen::QrCode qr = qrcodegen::QrCode::encodeText(data.toUtf8().constData(), qrcodegen::QrCode::Ecc::LOW);
-    const int s = qr.getSize() > 0 ? qr.getSize() : 1;
-    const double w = sz.width();
-    const double h = sz.height();
-    const double aspect = w / h;
-    const double size = ((aspect > 1.0) ? h : w);
-    const double scale = size / (s + 2);
-    // NOTE: For performance reasons my implementation only draws the foreground parts in supplied color.
-    // It expects background to be prepared already (in white or whatever is preferred).
+    Handle<QRcode, QRcode_free> qr{ QRcode_encodeString(data.toUtf8().constData(), 0, QRecLevel::QR_ECLEVEL_M, QRencodeMode::QR_MODE_8,
+                                                        1) };
+    if (!qr) {
+        qWarning() << "Unable to encode" << data << "as QR code";
+        return;
+    }
+
     painter.setPen(Qt::NoPen);
     painter.setBrush(fg);
-    for (int y = 0; y < s; y++) {
-        for (int x = 0; x < s; x++) {
-            const int color = qr.getModule(x, y);  // 0 for white, 1 for black
-            if (0 != color) {
-                const double rx1 = (x + 1) * scale, ry1 = (y + 1) * scale;
-                QRectF r(rx1, ry1, scale, scale);
+
+    // Make sure the QR code fits in the canvas with some padding
+    const auto qrSize = qr->width;
+    const auto canvasWidth = canvasSize.width();
+    const auto canvasHeight = canvasSize.height();
+    const auto scale = 0.8 * std::min(canvasWidth / qrSize, canvasHeight / qrSize);
+
+    // Find an offset to center it in the canvas
+    const auto offsetX = (canvasWidth - qrSize * scale) / 2;
+    const auto offsetY = (canvasHeight - qrSize * scale) / 2;
+
+    for (int y = 0; y < qrSize; y++) {
+        for (int x = 0; x < qrSize; x++) {
+            auto shouldFillIn = qr->data[y * qrSize + x] & 1;
+            if (shouldFillIn) {
+                QRectF r(offsetX + x * scale, offsetY + y * scale, scale, scale);
                 painter.drawRects(&r, 1);
             }
         }
@@ -180,10 +205,11 @@ void MSALoginDialog::authorizeWithBrowserWithExtra(QString url, QString code, [[
     ui->stackedWidget->updateGeometry();
     this->adjustSize();
 
-    const auto linkString = QString("<a href=\"%1\">%2</a>").arg(url, url);
+    const auto displayUrl = url;
     if (url == "https://www.microsoft.com/link" && !code.isEmpty()) {
         url += QString("?otc=%1").arg(code);
     }
+    const auto linkString = QString("<a href=\"%1\">%2</a>").arg(url, displayUrl);
     ui->code->setText(code);
 
     auto size = QSize(150, 150);

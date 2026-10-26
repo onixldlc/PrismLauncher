@@ -39,12 +39,10 @@
 #include <QDomDocument>
 
 #include <QDebug>
+#include <utility>
+#include "Application.h"
 
-NewsChecker::NewsChecker(shared_qobject_ptr<QNetworkAccessManager> network, const QString& feedUrl)
-{
-    m_network = network;
-    m_feedUrl = feedUrl;
-}
+NewsChecker::NewsChecker(QNetworkAccessManager* network, QString feedUrl) : m_feedUrl(std::move(feedUrl)), m_network(network) {}
 
 void NewsChecker::reloadNews()
 {
@@ -54,10 +52,12 @@ void NewsChecker::reloadNews()
         return;
     }
 
+    m_entry = APPLICATION->metacache()->resolveEntry("feed", "feed.xml");
+
     qDebug() << "Reloading news.";
 
     NetJob::Ptr job{ new NetJob("News RSS Feed", m_network) };
-    job->addNetAction(Net::Download::makeByteArray(m_feedUrl, newsData));
+    job->addNetAction(Net::Request::makeCached(m_feedUrl, m_entry));
     job->setAskRetry(false);
     connect(job.get(), &NetJob::succeeded, this, &NewsChecker::rssDownloadFinished);
     connect(job.get(), &NetJob::failed, this, &NewsChecker::rssDownloadFailed);
@@ -73,19 +73,21 @@ void NewsChecker::rssDownloadFinished()
     m_newsNetJob.reset();
     QDomDocument doc;
     {
-        // Stuff to store error info in.
-        QString errorMsg = "Unknown error.";
-        int errorLine = -1;
-        int errorCol = -1;
+        QFile feed(m_entry->getFullPath());
 
-        // Parse the XML.
-        if (!doc.setContent(*newsData, false, &errorMsg, &errorLine, &errorCol)) {
-            QString fullErrorMsg = QString("Error parsing RSS feed XML. %1 at %2:%3.").arg(errorMsg).arg(errorLine).arg(errorCol);
-            fail(fullErrorMsg);
-            newsData->clear();
-            return;
+        if (feed.open(QFile::ReadOnly | QFile::Text)) {
+            QTextStream in(&feed);
+            // Parse the XML.
+            auto result = doc.setContent(in.readAll());
+            if (!result) {
+                const QString fullErrorMsg = QString("Error parsing RSS feed XML. %1 at %2:%3.")
+                                                 .arg(result.errorMessage)
+                                                 .arg(result.errorLine)
+                                                 .arg(result.errorColumn);
+                fail(fullErrorMsg);
+                return;
+            }
         }
-        newsData->clear();
     }
 
     // If the parsing succeeded, read it.
@@ -107,7 +109,7 @@ void NewsChecker::rssDownloadFinished()
     succeed();
 }
 
-void NewsChecker::rssDownloadFailed(QString reason)
+void NewsChecker::rssDownloadFailed(const QString& reason)
 {
     // Set an error message and fail.
     fail(tr("Failed to load news RSS feed:\n%1").arg(reason));

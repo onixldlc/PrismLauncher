@@ -4,7 +4,7 @@
 /*
  *  Prism Launcher - Minecraft Launcher
  *  Copyright (C) 2022 Sefa Eyeoglu <contact@scrumplex.net>
- *  Copyright (c) 2023 Trial97 <alexandru.tripon97@gmail.com>
+ *  Copyright (c) 2023-2025 Trial97 <alexandru.tripon97@gmail.com>
  *
  *  This program is free software: you can redistribute it and/or modify
  *  it under the terms of the GNU General Public License as published by
@@ -42,20 +42,20 @@
 #include <QList>
 #include <QString>
 
-#include <list>
 #include <optional>
+#include <utility>
 
 #include "../Version.h"
-
+#include "Result.h"
 #include "modplatform/ModIndex.h"
 #include "modplatform/ResourceType.h"
+#include "net/NetJob.h"
+#include "net/RPCSink.h"
 #include "tasks/Task.h"
 
 /* Simple class with a common interface for interacting with APIs */
 class ResourceAPI {
    public:
-    virtual ~ResourceAPI() = default;
-
     struct SortingMethod {
         // The index of the sorting method. Used to allow for arbitrary ordering in the list of methods.
         // Used by Flame in the API request.
@@ -64,7 +64,14 @@ class ResourceAPI {
         // Used by Modrinth in the API request.
         QString name;
         // The human-readable name of the sorting, used for display in the UI.
-        QString readable_name;
+        QString readableName;
+    };
+
+    template <typename T>
+    struct Callback {
+        std::function<void(T&)> onSucceed;
+        std::function<void(const QString& reason, int networkErrorCode)> onFail;
+        std::function<void()> onAbort;
     };
 
     struct SearchArgs {
@@ -74,46 +81,27 @@ class ResourceAPI {
         std::optional<QString> search;
         std::optional<SortingMethod> sorting;
         std::optional<ModPlatform::ModLoaderTypes> loaders;
-        std::optional<std::list<Version>> versions;
-        std::optional<ModPlatform::Side> side;
+        std::optional<std::vector<Version>> versions;
+        std::optional<ModPlatform::SideType> side;
         std::optional<QStringList> categoryIds;
-        bool openSource;
-    };
-    struct SearchCallbacks {
-        std::function<void(QJsonDocument&)> on_succeed;
-        std::function<void(QString const& reason, int network_error_code)> on_fail;
-        std::function<void()> on_abort;
+        bool openSource{};
+        std::vector<ModPlatform::DisclosureType> excludeDisclosureTypes;
     };
 
     struct VersionSearchArgs {
-        ModPlatform::IndexedPack pack;
+        ModPlatform::IndexedPack::Ptr pack;
 
-        std::optional<std::list<Version>> mcVersions;
+        std::optional<std::vector<Version>> mcVersions;
         std::optional<ModPlatform::ModLoaderTypes> loaders;
-    };
-    struct VersionSearchCallbacks {
-        std::function<void(QJsonDocument&, ModPlatform::IndexedPack)> on_succeed;
-        std::function<void(QString const& reason, int network_error_code)> on_fail;
-    };
-
-    struct ProjectInfoArgs {
-        ModPlatform::IndexedPack pack;
-    };
-    struct ProjectInfoCallbacks {
-        std::function<void(QJsonDocument&, const ModPlatform::IndexedPack&)> on_succeed;
-        std::function<void(QString const& reason)> on_fail;
-        std::function<void()> on_abort;
+        ModPlatform::ResourceType resourceType;
+        bool includeChangelog{};
     };
 
     struct DependencySearchArgs {
         ModPlatform::Dependency dependency;
         Version mcVersion;
         ModPlatform::ModLoaderTypes loader;
-    };
-
-    struct DependencySearchCallbacks {
-        std::function<void(QJsonDocument&, const ModPlatform::Dependency&)> on_succeed;
-        std::function<void(QString const& reason, int network_error_code)> on_fail;
+        bool includeChangelog{};
     };
 
    public:
@@ -121,63 +109,36 @@ class ResourceAPI {
     virtual auto getSortingMethods() const -> QList<SortingMethod> = 0;
 
    public slots:
-    [[nodiscard]] virtual Task::Ptr searchProjects(SearchArgs&&, SearchCallbacks&&) const
-    {
-        qWarning() << "TODO: ResourceAPI::searchProjects";
-        return nullptr;
-    }
-    virtual Task::Ptr getProject([[maybe_unused]] QString addonId,
-                                               [[maybe_unused]] std::shared_ptr<QByteArray> response) const
-    {
-        qWarning() << "TODO: ResourceAPI::getProject";
-        return nullptr;
-    }
-    virtual Task::Ptr getProjects([[maybe_unused]] QStringList addonIds,
-                                                [[maybe_unused]] std::shared_ptr<QByteArray> response) const
-    {
-        qWarning() << "TODO: ResourceAPI::getProjects";
-        return nullptr;
-    }
 
-    virtual Task::Ptr getProjectInfo(ProjectInfoArgs&&, ProjectInfoCallbacks&&) const
-    {
-        qWarning() << "TODO: ResourceAPI::getProjectInfo";
-        return nullptr;
-    }
-    virtual Task::Ptr getProjectVersions(VersionSearchArgs&&, VersionSearchCallbacks&&) const
-    {
-        qWarning() << "TODO: ResourceAPI::getProjectVersions";
-        return nullptr;
-    }
+    virtual std::pair<Task::Ptr, QByteArray*> getProjects(QStringList addonIds) const = 0;
 
-    virtual Task::Ptr getDependencyVersion(DependencySearchArgs&&, DependencySearchCallbacks&&) const
-    {
-        qWarning() << "TODO";
-        return nullptr;
-    }
+    Task::Ptr getProjectVersions(const VersionSearchArgs& args, const Callback<QVector<ModPlatform::IndexedVersion>>& callbacks) const;
+    virtual Task::Ptr getDependencyVersion(const DependencySearchArgs&, const Callback<ModPlatform::IndexedVersion>&) const;
+
+   public slots:
+
+    virtual Net::RPC::Spec<ModPlatform::IndexedPack> getProject(const QString& id) const = 0;
+    virtual std::optional<Net::RPC::Spec<bool>> getProjectExtra(ModPlatform::IndexedPack& /*pack*/) const { return {}; }
+    virtual Net::RPC::Spec<QList<ModPlatform::IndexedPack>> searchProjects(const SearchArgs& args) const = 0;
+
+    // helpers to omit the netJob stuff
+    std::pair<NetJob::Ptr, ModPlatform::IndexedPack*> getProjectTask(const QString& addonId,
+                                                                     bool loadExtra = false,
+                                                                     bool askRetry = true) const;
+    std::pair<NetJob::Ptr, QList<ModPlatform::IndexedPack>*> searchProjectsTask(const SearchArgs& args) const;
 
    protected:
-    inline QString debugName() const { return "External resource API"; }
+    ~ResourceAPI() = default;
 
-    inline QString mapMCVersionToModrinth(Version v) const
-    {
-        static const QString preString = " Pre-Release ";
-        auto verStr = v.toString();
+    virtual QString debugName() const { return "External resource API"; }
 
-        if (verStr.contains(preString)) {
-            verStr.replace(preString, "-pre");
-        }
-        verStr.replace(" ", "-");
-        return verStr;
-    }
+   public:
+    virtual auto getVersionsURL(const VersionSearchArgs& args) const -> std::optional<QString> = 0;
+    virtual auto getDependencyURL(const DependencySearchArgs& args) const -> std::optional<QString> = 0;
 
-    inline QString getGameVersionsString(std::list<Version> mcVersions) const
-    {
-        QString s;
-        for (auto& ver : mcVersions) {
-            s += QString("\"%1\",").arg(mapMCVersionToModrinth(ver));
-        }
-        s.remove(s.length() - 1, 1);  // remove last comma
-        return s;
-    }
+    virtual Result<ModPlatform::IndexedVersion> loadIndexedPackVersion(QJsonObject& obj, ModPlatform::ResourceType) const = 0;
+
+    virtual std::pair<Task::Ptr, QByteArray*> getModCategories() const = 0;
+
+    virtual QList<ModPlatform::Category> loadModCategories(const QByteArray& response) const = 0;
 };

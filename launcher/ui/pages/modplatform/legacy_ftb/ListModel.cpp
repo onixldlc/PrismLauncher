@@ -35,9 +35,10 @@
 
 #include "ListModel.h"
 #include "Application.h"
-#include "net/ApiDownload.h"
+#include "net/ApiRequest.h"
 #include "net/HttpMetaCache.h"
 #include "net/NetJob.h"
+#include "settings/SettingsObject.h"
 
 #include <Version.h>
 #include "StringUtils.h"
@@ -127,20 +128,6 @@ ListModel::ListModel(QObject* parent) : QAbstractListModel(parent) {}
 
 ListModel::~ListModel() {}
 
-QString ListModel::translatePackType(PackType type) const
-{
-    switch (type) {
-        case PackType::Public:
-            return tr("Public Modpack");
-        case PackType::ThirdParty:
-            return tr("Third Party Modpack");
-        case PackType::Private:
-            return tr("Private Modpack");
-    }
-    qWarning() << "Unknown FTB modpack type:" << int(type);
-    return QString();
-}
-
 int ListModel::rowCount(const QModelIndex& parent) const
 {
     return parent.isValid() ? 0 : modpacks.size();
@@ -173,7 +160,7 @@ QVariant ListModel::data(const QModelIndex& index, int role) const
             if (m_logoMap.contains(pack.logo)) {
                 return (m_logoMap.value(pack.logo));
             }
-            QIcon icon = APPLICATION->getThemedIcon("screenshot-placeholder");
+            QIcon icon = QIcon::fromTheme("screenshot-placeholder");
             ((ListModel*)this)->requestLogo(pack.logo);
             return icon;
         }
@@ -191,6 +178,7 @@ QVariant ListModel::data(const QModelIndex& index, int role) const
                 // bugged pack, currently only indicates bugged xml
                 return QColor(244, 229, 66);
             }
+            return {};
         }
         case Qt::DisplayRole:
             return pack.name;
@@ -269,7 +257,7 @@ void ListModel::requestLogo(QString file)
     MetaEntryPtr entry = APPLICATION->metacache()->resolveEntry("FTBPacks", QString("logos/%1").arg(file));
     NetJob* job = new NetJob(QString("FTB Icon Download for %1").arg(file), APPLICATION->network());
     job->setAskRetry(false);
-    job->addNetAction(Net::ApiDownload::makeCached(QUrl(QString(BuildConfig.LEGACY_FTB_CDN_BASE_URL + "static/%1").arg(file)), entry));
+    job->addNetAction(Net::ApiRequest::makeCached(QUrl(QString(BuildConfig.LEGACY_FTB_CDN_BASE_URL + "static/%1").arg(file)), entry));
 
     auto fullPath = entry->getFullPath();
     connect(job, &NetJob::finished, this, [this, file, fullPath, job] {

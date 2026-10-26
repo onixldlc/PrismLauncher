@@ -34,6 +34,7 @@
  */
 
 #include <QTest>
+#include "Json.h"
 
 #include <FileSystem.h>
 #include <RuntimeContext.h>
@@ -45,14 +46,12 @@
 class LibraryTest : public QObject {
     Q_OBJECT
    private:
-    LibraryPtr readMojangJson(const QString path)
+    auto readMojangJson(const QString path)
     {
-        QFile jsonFile(path);
-        jsonFile.open(QIODevice::ReadOnly);
-        auto data = jsonFile.readAll();
-        jsonFile.close();
-        ProblemContainer problems;
-        return MojangVersionFormat::libraryFromJson(problems, QJsonDocument::fromJson(data).object(), path);
+        return Json::requireDocument(path).and_then([&path](const auto& v) {
+            ProblemContainer problems;
+            return MojangVersionFormat::libraryFromJson(problems, v.object(), path);
+        });
     }
     // get absolute path to expected storage, assuming default cache prefix
     QStringList getStorage(QString relative) { return { FS::PathCombine(cache->getBasePath("libraries"), relative) }; }
@@ -70,7 +69,7 @@ class LibraryTest : public QObject {
     {
         cache.reset(new HttpMetaCache());
         cache->addBase("libraries", QDir("libraries").absolutePath());
-        dataDir = QDir(QFINDTESTDATA("testdata/Library")).absolutePath();
+        dataDir = QDir(QFINDTESTDATA("testdata/Libraries")).absolutePath();
     }
     void test_legacy()
     {
@@ -95,7 +94,7 @@ class LibraryTest : public QObject {
         auto downloads = test.getDownloads(r, cache.get(), failedFiles, QString());
         QCOMPARE(downloads.size(), 1);
         QCOMPARE(failedFiles, {});
-        Net::NetRequest::Ptr dl = downloads[0];
+        Net::Request::Ptr dl = downloads[0];
         QCOMPARE(dl->url(), QUrl("file://foo/bar/test/package/testname/testversion/testname-testversion.jar"));
     }
     void test_legacy_url_local_broken()
@@ -116,14 +115,14 @@ class LibraryTest : public QObject {
         QCOMPARE(test.isNative(), false);
         QStringList failedFiles;
         test.setHint("local");
-        auto downloads = test.getDownloads(r, cache.get(), failedFiles, QFINDTESTDATA("testdata/Library"));
+        auto downloads = test.getDownloads(r, cache.get(), failedFiles, QFINDTESTDATA("testdata/Libraries"));
         QCOMPARE(downloads.size(), 0);
         qDebug() << failedFiles;
         QCOMPARE(failedFiles.size(), 0);
 
         QStringList jar, native, native32, native64;
-        test.getApplicableFiles(r, jar, native, native32, native64, QFINDTESTDATA("testdata/Library"));
-        QCOMPARE(jar, { QFileInfo(QFINDTESTDATA("testdata/Library/codecwav-20101023.jar")).absoluteFilePath() });
+        test.getApplicableFiles(r, jar, native, native32, native64, QFINDTESTDATA("testdata/Libraries"));
+        QCOMPARE(jar, { QFileInfo(QFINDTESTDATA("testdata/Libraries/codecwav-20101023.jar")).absoluteFilePath() });
         QCOMPARE(native, {});
         QCOMPARE(native32, {});
         QCOMPARE(native64, {});
@@ -214,25 +213,27 @@ class LibraryTest : public QObject {
         test.setRepositoryURL("file://foo/bar");
         {
             QStringList jar, native, native32, native64;
-            test.getApplicableFiles(r, jar, native, native32, native64, QFINDTESTDATA("testdata/Library"));
+            test.getApplicableFiles(r, jar, native, native32, native64, QFINDTESTDATA("testdata/Libraries"));
             QCOMPARE(jar, {});
             QCOMPARE(native, {});
-            QCOMPARE(native32, { QFileInfo(QFINDTESTDATA("testdata/Library/testname-testversion-linux-32.jar")).absoluteFilePath() });
-            QCOMPARE(native64, { QFileInfo(QFINDTESTDATA("testdata/Library") + "/testname-testversion-linux-64.jar").absoluteFilePath() });
+            QCOMPARE(native32, { QFileInfo(QFINDTESTDATA("testdata/Libraries/testname-testversion-linux-32.jar")).absoluteFilePath() });
+            QCOMPARE(native64,
+                     { QFileInfo(QFINDTESTDATA("testdata/Libraries") + "/testname-testversion-linux-64.jar").absoluteFilePath() });
             QStringList failedFiles;
-            auto dls = test.getDownloads(r, cache.get(), failedFiles, QFINDTESTDATA("testdata/Library"));
+            auto dls = test.getDownloads(r, cache.get(), failedFiles, QFINDTESTDATA("testdata/Libraries"));
             QCOMPARE(dls.size(), 0);
             QCOMPARE(failedFiles,
-                     { QFileInfo(QFINDTESTDATA("testdata/Library") + "/testname-testversion-linux-64.jar").absoluteFilePath() });
+                     { QFileInfo(QFINDTESTDATA("testdata/Libraries") + "/testname-testversion-linux-64.jar").absoluteFilePath() });
         }
     }
     void test_onenine()
     {
         RuntimeContext r = dummyContext("osx");
-        auto test = readMojangJson(QFINDTESTDATA("testdata/Library/lib-simple.json"));
+        auto test = readMojangJson(QFINDTESTDATA("testdata/Libraries/lib-simple.json"));
+        QVERIFY2(test, test.has_value() ? "" : qPrintable(test.error()));
         {
             QStringList jar, native, native32, native64;
-            test->getApplicableFiles(r, jar, native, native32, native64, QString());
+            test.value()->getApplicableFiles(r, jar, native, native32, native64, QString());
             QCOMPARE(jar, getStorage("com/paulscode/codecwav/20101023/codecwav-20101023.jar"));
             QCOMPARE(native, {});
             QCOMPARE(native32, {});
@@ -241,17 +242,17 @@ class LibraryTest : public QObject {
         r.system = "linux";
         {
             QStringList failedFiles;
-            auto dls = test->getDownloads(r, cache.get(), failedFiles, QString());
+            auto dls = test.value()->getDownloads(r, cache.get(), failedFiles, QString());
             QCOMPARE(dls.size(), 1);
             QCOMPARE(failedFiles, {});
             QCOMPARE(dls[0]->url(), QUrl("https://libraries.minecraft.net/com/paulscode/codecwav/20101023/codecwav-20101023.jar"));
         }
         r.system = "osx";
-        test->setHint("local");
+        test.value()->setHint("local");
         {
             QStringList jar, native, native32, native64;
-            test->getApplicableFiles(r, jar, native, native32, native64, QFINDTESTDATA("testdata/Library"));
-            QCOMPARE(jar, { QFileInfo(QFINDTESTDATA("testdata/Library/codecwav-20101023.jar")).absoluteFilePath() });
+            test.value()->getApplicableFiles(r, jar, native, native32, native64, QFINDTESTDATA("testdata/Libraries"));
+            QCOMPARE(jar, { QFileInfo(QFINDTESTDATA("testdata/Libraries/codecwav-20101023.jar")).absoluteFilePath() });
             QCOMPARE(native, {});
             QCOMPARE(native32, {});
             QCOMPARE(native64, {});
@@ -259,7 +260,7 @@ class LibraryTest : public QObject {
         r.system = "linux";
         {
             QStringList failedFiles;
-            auto dls = test->getDownloads(r, cache.get(), failedFiles, QFINDTESTDATA("testdata/Library"));
+            auto dls = test.value()->getDownloads(r, cache.get(), failedFiles, QFINDTESTDATA("testdata/Libraries"));
             QCOMPARE(dls.size(), 0);
             QCOMPARE(failedFiles, {});
         }
@@ -267,12 +268,13 @@ class LibraryTest : public QObject {
     void test_onenine_local_override()
     {
         RuntimeContext r = dummyContext("osx");
-        auto test = readMojangJson(QFINDTESTDATA("testdata/Library/lib-simple.json"));
-        test->setHint("local");
+        auto test = readMojangJson(QFINDTESTDATA("testdata/Libraries/lib-simple.json"));
+        QVERIFY2(test, test.has_value() ? "" : qPrintable(test.error()));
+        test.value()->setHint("local");
         {
             QStringList jar, native, native32, native64;
-            test->getApplicableFiles(r, jar, native, native32, native64, QFINDTESTDATA("testdata/Library"));
-            QCOMPARE(jar, { QFileInfo(QFINDTESTDATA("testdata/Library/codecwav-20101023.jar")).absoluteFilePath() });
+            test.value()->getApplicableFiles(r, jar, native, native32, native64, QFINDTESTDATA("testdata/Libraries"));
+            QCOMPARE(jar, { QFileInfo(QFINDTESTDATA("testdata/Libraries/codecwav-20101023.jar")).absoluteFilePath() });
             QCOMPARE(native, {});
             QCOMPARE(native32, {});
             QCOMPARE(native64, {});
@@ -280,7 +282,7 @@ class LibraryTest : public QObject {
         r.system = "linux";
         {
             QStringList failedFiles;
-            auto dls = test->getDownloads(r, cache.get(), failedFiles, QFINDTESTDATA("testdata/Library"));
+            auto dls = test.value()->getDownloads(r, cache.get(), failedFiles, QFINDTESTDATA("testdata/Libraries"));
             QCOMPARE(dls.size(), 0);
             QCOMPARE(failedFiles, {});
         }
@@ -288,16 +290,17 @@ class LibraryTest : public QObject {
     void test_onenine_native()
     {
         RuntimeContext r = dummyContext("osx");
-        auto test = readMojangJson(QFINDTESTDATA("testdata/Library/lib-native.json"));
+        auto test = readMojangJson(QFINDTESTDATA("testdata/Libraries/lib-native.json"));
+        QVERIFY2(test, test.has_value() ? "" : qPrintable(test.error()));
         QStringList jar, native, native32, native64;
-        test->getApplicableFiles(r, jar, native, native32, native64, QString());
+        test.value()->getApplicableFiles(r, jar, native, native32, native64, QString());
         QCOMPARE(jar, QStringList());
         QCOMPARE(native,
                  getStorage("org/lwjgl/lwjgl/lwjgl-platform/2.9.4-nightly-20150209/lwjgl-platform-2.9.4-nightly-20150209-natives-osx.jar"));
         QCOMPARE(native32, {});
         QCOMPARE(native64, {});
         QStringList failedFiles;
-        auto dls = test->getDownloads(r, cache.get(), failedFiles, QString());
+        auto dls = test.value()->getDownloads(r, cache.get(), failedFiles, QString());
         QCOMPARE(dls.size(), 1);
         QCOMPARE(failedFiles, {});
         QCOMPARE(dls[0]->url(), QUrl("https://libraries.minecraft.net/org/lwjgl/lwjgl/lwjgl-platform/2.9.4-nightly-20150209/"
@@ -306,15 +309,16 @@ class LibraryTest : public QObject {
     void test_onenine_native_arch()
     {
         RuntimeContext r = dummyContext("windows");
-        auto test = readMojangJson(QFINDTESTDATA("testdata/Library/lib-native-arch.json"));
+        auto test = readMojangJson(QFINDTESTDATA("testdata/Libraries/lib-native-arch.json"));
+        QVERIFY2(test, test.has_value() ? "" : qPrintable(test.error()));
         QStringList jar, native, native32, native64;
-        test->getApplicableFiles(r, jar, native, native32, native64, QString());
+        test.value()->getApplicableFiles(r, jar, native, native32, native64, QString());
         QCOMPARE(jar, {});
         QCOMPARE(native, {});
         QCOMPARE(native32, getStorage("tv/twitch/twitch-platform/5.16/twitch-platform-5.16-natives-windows-32.jar"));
         QCOMPARE(native64, getStorage("tv/twitch/twitch-platform/5.16/twitch-platform-5.16-natives-windows-64.jar"));
         QStringList failedFiles;
-        auto dls = test->getDownloads(r, cache.get(), failedFiles, QString());
+        auto dls = test.value()->getDownloads(r, cache.get(), failedFiles, QString());
         QCOMPARE(dls.size(), 2);
         QCOMPARE(failedFiles, {});
         QCOMPARE(dls[0]->url(),

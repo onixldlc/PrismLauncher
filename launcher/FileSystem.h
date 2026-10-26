@@ -37,8 +37,8 @@
 
 #pragma once
 
-#include "Exception.h"
-#include "pathmatcher/IPathMatcher.h"
+#include "Filter.h"
+#include "Result.h"
 
 #include <system_error>
 
@@ -48,33 +48,29 @@
 #include <QObject>
 #include <QPair>
 #include <QThread>
+#include <utility>
 
 namespace FS {
-
-class FileSystemException : public ::Exception {
-   public:
-    FileSystemException(const QString& message) : Exception(message) {}
-};
 
 /**
  * write data to a file safely
  */
-void write(const QString& filename, const QByteArray& data);
+Result<> write(const QString& filename, const QByteArray& data);
 
 /**
  * append data to a file safely
  */
-void appendSafe(const QString& filename, const QByteArray& data);
+Result<> appendSafe(const QString& filename, const QByteArray& data);
 
 /**
  * append data to a file
  */
-void append(const QString& filename, const QByteArray& data);
+Result<> append(const QString& filename, const QByteArray& data);
 
 /**
  * read data from a file safely
  */
-QByteArray read(const QString& filename);
+Result<QByteArray> read(const QString& filename);
 
 /**
  * Update the last changed timestamp of an existing file
@@ -85,19 +81,21 @@ bool updateTimestamp(const QString& filename);
  * Creates all the folders in a path for the specified path
  * last segment of the path is treated as a file name and is ignored!
  */
-bool ensureFilePathExists(QString filenamepath);
+bool ensureFilePathExists(const QString& filenamepath);
 
 /**
  * Creates all the folders in a path for the specified path
  * last segment of the path is treated as a folder name and is created!
  */
-bool ensureFolderPathExists(const QFileInfo folderPath);
+bool ensureFolderPathExists(const QFileInfo& folderPath);
 
 /**
  * Creates all the folders in a path for the specified path
  * last segment of the path is treated as a folder name and is created!
  */
-bool ensureFolderPathExists(const QString folderPathName);
+bool ensureFolderPathExists(const QString& folderPathName);
+
+struct LinkPair;
 
 /**
  * @brief Copies a directory and it's contents from src to dest
@@ -115,9 +113,20 @@ class copy : public QObject {
         m_followSymlinks = follow;
         return *this;
     }
-    copy& matcher(IPathMatcher::Ptr filter)
+    /**
+     * Setting this to true copies empty and symlinked directories (if follow symlinks is not set)
+     * instead of ignoring them.
+     *
+     * Defaults to false
+     */
+    copy& copyDirectories(const bool copyDirectories)
     {
-        m_matcher = filter;
+        m_copyDirectories = copyDirectories;
+        return *this;
+    }
+    copy& matcher(Filter filter)
+    {
+        m_matcher = std::move(filter);
         return *this;
     }
     copy& whitelist(bool whitelist)
@@ -133,9 +142,9 @@ class copy : public QObject {
 
     bool operator()(bool dryRun = false) { return operator()(QString(), dryRun); }
 
-    qsizetype totalCopied() { return m_copied; }
-    qsizetype totalFailed() { return m_failedPaths.length(); }
-    QStringList failed() { return m_failedPaths; }
+    qsizetype totalCopied() const { return m_copied; }
+    qsizetype totalFailed() const { return m_failedPaths.length(); }
+    QStringList failed() const { return m_failedPaths; }
 
    signals:
     void fileCopied(const QString& relativeName);
@@ -146,13 +155,15 @@ class copy : public QObject {
     bool operator()(const QString& offset, bool dryRun = false);
 
    private:
+    bool m_copyDirectories = false;
     bool m_followSymlinks = true;
-    IPathMatcher::Ptr m_matcher = nullptr;
+    QList<LinkPair> m_symlinksToCopy;
+    Filter m_matcher = nullptr;
     bool m_whitelist = false;
     bool m_overwrite = false;
     QDir m_src;
     QDir m_dst;
-    qsizetype m_copied;
+    qsizetype m_copied{};
     QStringList m_failedPaths;
 };
 
@@ -172,7 +183,7 @@ class ExternalLinkFileProcess : public QThread {
     Q_OBJECT
    public:
     ExternalLinkFileProcess(QString server, bool useHardLinks, QObject* parent = nullptr)
-        : QThread(parent), m_useHardLinks(useHardLinks), m_server(server)
+        : QThread(parent), m_useHardLinks(useHardLinks), m_server(std::move(server))
     {}
 
     void run() override
@@ -198,20 +209,20 @@ class ExternalLinkFileProcess : public QThread {
 class create_link : public QObject {
     Q_OBJECT
    public:
-    create_link(const QList<LinkPair> path_pairs, QObject* parent = nullptr) : QObject(parent) { m_path_pairs.append(path_pairs); }
+    explicit create_link(const QList<LinkPair>& pathPairs, QObject* parent = nullptr) : QObject(parent) { m_pathPairs.append(pathPairs); }
     create_link(const QString& src, const QString& dst, QObject* parent = nullptr) : QObject(parent)
     {
-        LinkPair pair = { src, dst };
-        m_path_pairs.append(pair);
+        LinkPair pair = { .src = src, .dst = dst };
+        m_pathPairs.append(pair);
     }
     create_link& useHardLinks(const bool useHard)
     {
         m_useHardLinks = useHard;
         return *this;
     }
-    create_link& matcher(IPathMatcher::Ptr filter)
+    create_link& matcher(Filter filter)
     {
-        m_matcher = filter;
+        m_matcher = std::move(filter);
         return *this;
     }
     create_link& whitelist(bool whitelist)
@@ -226,7 +237,7 @@ class create_link : public QObject {
     }
     create_link& setMaxDepth(int depth)
     {
-        m_max_depth = depth;
+        m_maxDepth = depth;
         return *this;
     }
     create_link& debug(bool d)
@@ -235,45 +246,48 @@ class create_link : public QObject {
         return *this;
     }
 
-    std::error_code getOSError() { return m_os_err; }
+    std::error_code getOSError() { return m_osErr; }
 
     bool operator()(bool dryRun = false) { return operator()(QString(), dryRun); }
 
-    int totalLinked() { return m_linked; }
-    int totalToLink() { return static_cast<int>(m_links_to_make.size()); }
+    int totalLinked() const { return m_linked; }
+    int totalToLink() const { return static_cast<int>(m_linksToMake.size()); }
 
     void runPrivileged() { runPrivileged(QString()); }
     void runPrivileged(const QString& offset);
 
-    QList<LinkResult> getResults() { return m_path_results; }
+    bool runPrivilegedAndWait(const QString& offset = QString());
+
+    QList<LinkResult> getResults() const { return m_pathResults; }
 
    signals:
     void fileLinked(const QString& srcName, const QString& dstName);
-    void linkFailed(const QString& srcName, const QString& dstName, const QString& err_msg, int err_value);
+    void linkFailed(const QString& srcName, const QString& dstName, const QString& errMsg, int errValue);
     void finished();
     void finishedPrivileged(bool gotResults);
 
    private:
     bool operator()(const QString& offset, bool dryRun = false);
-    void make_link_list(const QString& offset);
-    bool make_links();
+    void makeLinkList(const QString& offset);
+    bool makeLinks();
 
    private:
     bool m_useHardLinks = false;
-    IPathMatcher::Ptr m_matcher = nullptr;
+    Filter m_matcher = nullptr;
     bool m_whitelist = false;
     bool m_recursive = true;
 
     /// @brief >= -1 = infinite, 0 = link files at src/* to dest/*, 1 = link files at src/*/* to dest/*/*, etc.
-    int m_max_depth = -1;
+    int m_maxDepth = -1;
 
-    QList<LinkPair> m_path_pairs;
-    QList<LinkResult> m_path_results;
-    QList<LinkPair> m_links_to_make;
+    QList<LinkPair> m_pathPairs;
+    QList<LinkResult> m_pathResults;
+    QList<LinkPair> m_linksToMake;
 
-    int m_linked;
+    int m_linked{};
     bool m_debug = false;
-    std::error_code m_os_err;
+    std::error_code m_osErr;
+    bool m_gotPrivilegedResults = false;
 
     QLocalServer m_linkServer;
 };
@@ -292,9 +306,18 @@ bool move(const QString& source, const QString& dest);
 bool deletePath(QString path);
 
 /**
+ * Delete a folder's contents recursively but not the folder itself.
+ * @param path The path to the folder.
+ * @return Whether the deletion was completely successful.
+ */
+bool deleteContents(const QString& path);
+
+bool removeFiles(const QStringList& listFile);
+
+/**
  * Trash a folder / file
  */
-bool trash(QString path, QString* pathInTrash = nullptr);
+bool trash(const QString& path, QString* pathInTrash = nullptr);
 
 QString PathCombine(const QString& path1, const QString& path2);
 QString PathCombine(const QString& path1, const QString& path2, const QString& path3);
@@ -339,16 +362,16 @@ QString ResolveExecutable(QString path);
  *
  * Returns false if the path logic somehow filed (and normalizedPath in invalid)
  */
-QString NormalizePath(QString path);
+QString NormalizePath(const QString& path);
 
 QString RemoveInvalidFilenameChars(QString string, QChar replaceWith = '-');
 
 QString RemoveInvalidPathChars(QString string, QChar replaceWith = '-');
 
-QString DirNameFromString(QString string, QString inDir = ".");
+QString DirNameFromString(const QString& string, const QStringList& inDirs = { "." });
 
 /// Checks if the a given Path contains "!"
-bool checkProblemticPathJava(QDir folder);
+bool checkProblemticPathJava(const QDir& folder);
 
 // Get the Directory representing the User's Desktop
 QString getDesktopDir();
@@ -358,15 +381,15 @@ QString getApplicationsDir();
 
 // Overrides one folder with the contents of another, preserving items exclusive to the first folder
 // Equivalent to doing QDir::rename, but allowing for overrides
-bool overrideFolder(QString overwritten_path, QString override_path);
+bool overrideFolder(const QString& overwrittenPath, const QString& overridePath);
 
 /**
  * Creates a shortcut to the specified target file at the specified destination path.
  * Returns null QString if creation failed; otherwise returns the path to the created shortcut.
  */
-QString createShortcut(QString destination, QString target, QStringList args, QString name, QString icon);
+QString createShortcut(QString destination, const QString& target, const QStringList& args, const QString& name, const QString& icon);
 
-enum class FilesystemType {
+enum class FilesystemType : std::uint8_t {
     FAT,
     NTFS,
     REFS,
@@ -395,7 +418,7 @@ enum class FilesystemType {
  * QMap is ordered
  *
  */
-static const QMap<FilesystemType, QStringList> s_filesystem_type_names = { { FilesystemType::FAT, { "FAT" } },
+static const QMap<FilesystemType, QStringList> g_filesystem_type_names = { { FilesystemType::FAT, { "FAT" } },
                                                                            { FilesystemType::NTFS, { "NTFS" } },
                                                                            { FilesystemType::REFS, { "REFS" } },
                                                                            { FilesystemType::EXT_2_OLD, { "EXT_2_OLD", "EXT2_OLD" } },
@@ -464,7 +487,7 @@ QString nearestExistentAncestor(const QString& path);
  */
 FilesystemInfo statFS(const QString& path);
 
-static const QList<FilesystemType> s_clone_filesystems = { FilesystemType::BTRFS, FilesystemType::APFS, FilesystemType::ZFS,
+static const QList<FilesystemType> g_clone_filesystems = { FilesystemType::BTRFS, FilesystemType::APFS, FilesystemType::ZFS,
                                                            FilesystemType::XFS,   FilesystemType::REFS, FilesystemType::BCACHEFS };
 
 /**
@@ -492,9 +515,9 @@ class clone : public QObject {
         m_src.setPath(src);
         m_dst.setPath(dst);
     }
-    clone& matcher(IPathMatcher::Ptr filter)
+    clone& matcher(Filter filter)
     {
-        m_matcher = filter;
+        m_matcher = std::move(filter);
         return *this;
     }
     clone& whitelist(bool whitelist)
@@ -505,10 +528,10 @@ class clone : public QObject {
 
     bool operator()(bool dryRun = false) { return operator()(QString(), dryRun); }
 
-    qsizetype totalCloned() { return m_cloned; }
-    qsizetype totalFailed() { return m_failedClones.length(); }
+    qsizetype totalCloned() const { return m_cloned; }
+    qsizetype totalFailed() const { return m_failedClones.length(); }
 
-    QList<QPair<QString, QString>> failed() { return m_failedClones; }
+    QList<QPair<QString, QString>> failed() const { return m_failedClones; }
 
    signals:
     void fileCloned(const QString& src, const QString& dst);
@@ -518,11 +541,11 @@ class clone : public QObject {
     bool operator()(const QString& offset, bool dryRun = false);
 
    private:
-    IPathMatcher::Ptr m_matcher = nullptr;
+    Filter m_matcher = nullptr;
     bool m_whitelist = false;
     QDir m_src;
     QDir m_dst;
-    qsizetype m_cloned;
+    qsizetype m_cloned{};
     QList<QPair<QString, QString>> m_failedClones;
 };
 
@@ -535,12 +558,12 @@ bool clone_file(const QString& src, const QString& dst, std::error_code& ec);
 #if defined(Q_OS_WIN)
 bool win_ioctl_clone(const std::wstring& src_path, const std::wstring& dst_path, std::error_code& ec);
 #elif defined(Q_OS_LINUX)
-bool linux_ficlone(const std::string& src_path, const std::string& dst_path, std::error_code& ec);
+bool linux_ficlone(const std::string& srcPath, const std::string& dstPath, std::error_code& ec);
 #elif defined(Q_OS_MACOS) || defined(Q_OS_FREEBSD) || defined(Q_OS_OPENBSD)
 bool macos_bsd_clonefile(const std::string& src_path, const std::string& dst_path, std::error_code& ec);
 #endif
 
-static const QList<FilesystemType> s_non_link_filesystems = {
+static const QList<FilesystemType> g_non_link_filesystems = {
     FilesystemType::FAT,
 };
 
@@ -565,5 +588,7 @@ QString getPathNameInLocal8bit(const QString& file);
 #endif
 
 QString getUniqueResourceName(const QString& filePath);
+
+Result<QString> getSafePathInRoot(const QString& basePath, const QString& entryName);
 
 }  // namespace FS

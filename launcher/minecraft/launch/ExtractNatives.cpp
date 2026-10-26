@@ -17,11 +17,10 @@
 #include <launch/LaunchTask.h>
 #include <minecraft/MinecraftInstance.h>
 
-#include <quazip/quazip.h>
-#include <quazip/quazipdir.h>
 #include <QDir>
 #include "FileSystem.h"
-#include "MMCZip.h"
+#include "archive/ArchiveReader.h"
+#include "archive/ArchiveWriter.h"
 
 #ifdef major
 #undef major
@@ -39,32 +38,26 @@ static QString replaceSuffix(QString target, const QString& suffix, const QStrin
     return target + replacement;
 }
 
-static bool unzipNatives(QString source, QString targetFolder, bool applyJnilibHack)
+static Result<> unzipNatives(QString source, QString targetFolder, bool applyJnilibHack)
 {
-    QuaZip zip(source);
-    if (!zip.open(QuaZip::mdUnzip)) {
-        return false;
-    }
+    MMCZip::ArchiveReader zip(source);
     QDir directory(targetFolder);
-    if (!zip.goToFirstFile()) {
-        return false;
+    if (directory.exists()) {
+        directory.setPath(directory.canonicalPath());
     }
-    do {
-        QString name = zip.getCurrentFileName();
+
+    auto extPtr = MMCZip::ArchiveWriter::createDiskWriter();
+    auto ext = extPtr.get();
+
+    return zip.parse([applyJnilibHack, directory, ext](MMCZip::ArchiveReader::File* f) {
+        QString name = f->filename();
         auto lowercase = name.toLower();
         if (applyJnilibHack) {
             name = replaceSuffix(name, ".jnilib", ".dylib");
         }
         QString absFilePath = directory.absoluteFilePath(name);
-        if (!JlCompress::extractFile(&zip, "", absFilePath)) {
-            return false;
-        }
-    } while (zip.goToNextFile());
-    zip.close();
-    if (zip.getZipError() != 0) {
-        return false;
-    }
-    return true;
+        return f->writeFile(ext, absFilePath, directory);
+    });
 }
 
 void ExtractNatives::executeTask()
@@ -75,17 +68,17 @@ void ExtractNatives::executeTask()
         emitSucceeded();
         return;
     }
-    auto settings = instance->settings();
 
     auto outputPath = instance->getNativePath();
     FS::ensureFolderPathExists(outputPath);
     auto javaVersion = instance->getJavaVersion();
     bool jniHackEnabled = javaVersion.major() >= 8;
     for (const auto& source : toExtract) {
-        if (!unzipNatives(source, outputPath, jniHackEnabled)) {
-            const char* reason = QT_TR_NOOP("Couldn't extract native jar '%1' to destination '%2'");
-            emit logLine(QString(reason).arg(source, outputPath), MessageLevel::Fatal);
-            emitFailed(tr(reason).arg(source, outputPath));
+        if (const auto result = unzipNatives(source, outputPath, jniHackEnabled); !result) {
+            const char* reason = QT_TR_NOOP("Couldn't extract native jar '%1' to destination '%2': %3");
+            emit logLine(QString(reason).arg(source, outputPath, result.error()), MessageLevel::Fatal);
+            emitFailed(tr(reason).arg(source, outputPath, result.error()));
+            return;
         }
     }
     emitSucceeded();

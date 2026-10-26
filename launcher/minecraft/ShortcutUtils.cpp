@@ -71,7 +71,7 @@ bool createInstanceShortcut(const Shortcut& shortcut, const QString& filePath)
 
     QFile iconFile(iconPath);
     if (!iconFile.open(QFile::WriteOnly)) {
-        QMessageBox::critical(shortcut.parent, QObject::tr("Create Shortcut"), QObject::tr("Failed to create icon for application."));
+        QMessageBox::critical(shortcut.parent, QObject::tr("Create Shortcut"), QObject::tr("Failed to create icon for application: %1").arg(iconFile.errorString()));
         return false;
     }
 
@@ -101,7 +101,7 @@ bool createInstanceShortcut(const Shortcut& shortcut, const QString& filePath)
 
     QFile iconFile(iconPath);
     if (!iconFile.open(QFile::WriteOnly)) {
-        QMessageBox::critical(shortcut.parent, QObject::tr("Create Shortcut"), QObject::tr("Failed to create icon for shortcut."));
+        QMessageBox::critical(shortcut.parent, QObject::tr("Create Shortcut"), QObject::tr("Failed to create icon for shortcut: %1").arg(iconFile.errorString()));
         return false;
     }
     bool success = icon->icon().pixmap(64, 64).save(&iconFile, "PNG");
@@ -123,11 +123,11 @@ bool createInstanceShortcut(const Shortcut& shortcut, const QString& filePath)
 
     // part of fix for weird bug involving the window icon being replaced
     // dunno why it happens, but parent 2-line fix seems to be enough, so w/e
-    auto appIcon = APPLICATION->getThemedIcon("logo");
+    auto appIcon = APPLICATION->logo();
 
     QFile iconFile(iconPath);
     if (!iconFile.open(QFile::WriteOnly)) {
-        QMessageBox::critical(shortcut.parent, QObject::tr("Create Shortcut"), QObject::tr("Failed to create icon for shortcut."));
+        QMessageBox::critical(shortcut.parent, QObject::tr("Create Shortcut"), QObject::tr("Failed to create icon for shortcut: %1").arg(iconFile.errorString()));
         return false;
     }
     bool success = icon->icon().pixmap(64, 64).save(&iconFile, "ICO");
@@ -146,7 +146,7 @@ bool createInstanceShortcut(const Shortcut& shortcut, const QString& filePath)
     QMessageBox::critical(shortcut.parent, QObject::tr("Create Shortcut"), QObject::tr("Not supported on your platform!"));
     return false;
 #endif
-    args.append({ "--launch", shortcut.instance->id() });
+    args.append({ "--launch", shortcut.instance->uuid() });
     args.append(shortcut.extraArgs);
 
     QString shortcutPath = FS::createShortcut(filePath, appPath, args, shortcut.name, iconPath);
